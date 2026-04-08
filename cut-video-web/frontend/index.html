@@ -11,7 +11,7 @@
     <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Space+Mono:wght@400;700&display=swap" rel="stylesheet">
 
     <!-- Styles -->
-    <link rel="stylesheet" href="/static/styles.css?v=12">
+    <link rel="stylesheet" href="/static/styles.css?v=13">
 </head>
 <body>
 
@@ -31,35 +31,6 @@
             </div>
 
             <div class="header-center">
-                <div class="transport" id="transport">
-                    <button class="transport-btn" id="btn-back" title="后退 5秒">
-                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                            <polygon points="11 19 2 12 11 5 11 19" fill="currentColor"/>
-                            <polygon points="22 19 13 12 22 5 22 19" fill="currentColor"/>
-                        </svg>
-                    </button>
-                    <button class="transport-btn transport-play" id="btn-play">
-                        <svg class="icon-play" viewBox="0 0 24 24" fill="currentColor">
-                            <polygon points="6 4 20 12 6 20 6 4"/>
-                        </svg>
-                        <svg class="icon-pause" viewBox="0 0 24 24" fill="currentColor" style="display:none">
-                            <rect x="5" y="4" width="4" height="16" rx="1"/>
-                            <rect x="15" y="4" width="4" height="16" rx="1"/>
-                        </svg>
-                    </button>
-                    <button class="transport-btn" id="btn-forward" title="前进 5秒">
-                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                            <polygon points="13 19 22 12 13 5 13 19" fill="currentColor"/>
-                            <polygon points="2 19 11 12 2 5 2 19" fill="currentColor"/>
-                        </svg>
-                    </button>
-                </div>
-                <div class="timecode" id="timecode">
-                    <span id="time-current">00:00:00</span>
-                    <span class="time-sep">/</span>
-                    <span id="time-total">00:00:00</span>
-                </div>
-            </div>
 
             <div class="header-right">
                 <div class="action-group">
@@ -179,12 +150,47 @@
                             <span class="current-word-badge" id="current-word-badge"></span>
                         </div>
                     </div>
-                    <div class="preview-progress">
-                        <div class="progress-bar" id="progress-bar">
-                            <div class="progress-fill" id="progress-fill"></div>
-                            <div class="progress-thumb" id="progress-thumb"></div>
+
+                    <!-- Video Controls -->
+                    <div class="video-controls">
+                        <div class="video-progress">
+                            <div class="progress-bar" id="progress-bar">
+                                <div class="progress-fill" id="progress-fill"></div>
+                                <div class="progress-thumb" id="progress-thumb"></div>
+                            </div>
+                        </div>
+                        <div class="video-transport">
+                            <div class="transport" id="transport">
+                                <button class="transport-btn" id="btn-back" title="后退 5秒">
+                                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                        <polygon points="11 19 2 12 11 5 11 19" fill="currentColor"/>
+                                        <polygon points="22 19 13 12 22 5 22 19" fill="currentColor"/>
+                                    </svg>
+                                </button>
+                                <button class="transport-btn transport-play" id="btn-play">
+                                    <svg class="icon-play" viewBox="0 0 24 24" fill="currentColor">
+                                        <polygon points="6 4 20 12 6 20 6 4"/>
+                                    </svg>
+                                    <svg class="icon-pause" viewBox="0 0 24 24" fill="currentColor" style="display:none">
+                                        <rect x="5" y="4" width="4" height="16" rx="1"/>
+                                        <rect x="15" y="4" width="4" height="16" rx="1"/>
+                                    </svg>
+                                </button>
+                                <button class="transport-btn" id="btn-forward" title="前进 5秒">
+                                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                        <polygon points="13 19 22 12 13 5 13 19" fill="currentColor"/>
+                                        <polygon points="2 19 11 12 2 5 2 19" fill="currentColor"/>
+                                    </svg>
+                                </button>
+                            </div>
+                            <div class="timecode" id="timecode">
+                                <span id="time-current">00:00:00</span>
+                                <span class="time-sep">/</span>
+                                <span id="time-total">00:00:00</span>
+                            </div>
                         </div>
                     </div>
+
                     <div class="preview-meta">
                         <span class="file-label" id="file-label">—</span>
                     </div>
@@ -265,6 +271,6 @@
     <!-- Download iframe -->
     <iframe id="download-frame" style="display:none;"></iframe>
 
-    <script src="/static/app.js?v=12"></script>
+    <script src="/static/app.js?v=13"></script>
 </body>
 </html>

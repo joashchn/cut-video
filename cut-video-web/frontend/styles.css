@@ -584,6 +584,23 @@ button:disabled {
     opacity: 1;
 }
 
+/* Video Controls - below video */
+.video-controls {
+    padding: var(--space-3) var(--space-4);
+    background: var(--bg-tertiary);
+}
+
+.video-progress {
+    margin-bottom: var(--space-3);
+}
+
+.video-transport {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: var(--space-4);
+}
+
 /* Progress Bar */
 .preview-progress {
     padding: var(--space-3) var(--space-4);

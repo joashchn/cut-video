@@ -39,19 +39,19 @@ uv sync
 ### 命令行
 
 ```bash
-# 基本用法（默认 paraformer-v2）
+# 基本用法（默认 paraformer-v1 + 热词）
 python cli.py audio.wav -o result.txt
 
 # 输出带时间戳的结果
 python cli.py audio.wav -t -o result.txt
 
-# 使用热词（v1 或 v2 模型）
-python cli.py audio.wav -w hotwords.json -t -o result.txt
+# 使用 v2 模型
+python cli.py audio.wav -m paraformer-v2 -t -o result.txt
 
-# 使用 v1 模型
+# 使用 v1 模型 + 自定义热词
 python cli.py audio.wav -m paraformer-v1 -w hotwords.json -t -o result.txt
 
-# 使用 v2 模型
+# 使用 v2 模型 + 热词
 python cli.py audio.wav -m paraformer-v2 -w hotwords.json -t -o result.txt
 ```
 
@@ -62,7 +62,7 @@ python cli.py audio.wav -m paraformer-v2 -w hotwords.json -t -o result.txt
 | `audio_file` | 音频文件路径 | - |
 | `-o, --output` | 输出文件路径 | stdout |
 | `-t, --timestamp` | 输出带时间戳的结果 | 关闭 |
-| `-m, --model` | 模型类型 | paraformer-v2 |
+| `-m, --model` | 模型类型 | paraformer-v1 |
 | `-w, --hotword-file` | 热词配置文件路径（JSON） | - |
 | `-l, --language` | 语言提示 | - |
 | `-k, --api-key` | API Key | DASHSCOPE_API_KEY 环境变量 |
@@ -71,8 +71,8 @@ python cli.py audio.wav -m paraformer-v2 -w hotwords.json -t -o result.txt
 
 | 模型 | 说明 | 推荐场景 |
 |------|------|---------|
-| **paraformer-v2** | ✅ 默认，多语种支持更好 | 直播、会议等多语种 |
-| paraformer-v1 | 中文效果好，热词支持 | 访谈、讲座等中英文混合 |
+| **paraformer-v1** | ✅ 默认，中文效果好，热词支持更好 | 访谈、讲座等中英文混合 |
+| paraformer-v2 | 多语种支持更好 | 直播、会议等多语种 |
 
 ### 热词功能
 
