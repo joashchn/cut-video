@@ -132,13 +132,20 @@ def main():
         print("-" * 50)
 
         if args.timestamp and result.sentences:
-            # 输出带时间戳的结果
+            # 输出带时间戳的结果（含词级）
             output_lines = []
             for s in result.sentences:
                 begin = format_timestamp(s["begin_time"] / 1000)
                 end = format_timestamp(s["end_time"] / 1000)
                 line = f"[{begin} -> {end}] {s['text']}"
                 output_lines.append(line)
+                # 添加词级时间戳
+                if s.get("words"):
+                    for w in s["words"]:
+                        w_begin = w["begin_time"]
+                        w_end = w["end_time"]
+                        w_line = f"    [{w_begin}ms -> {w_end}ms] {w['text']}"
+                        output_lines.append(w_line)
 
             output_text = "\n".join(output_lines)
         else:

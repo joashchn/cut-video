@@ -178,11 +178,20 @@ class FunASRTranscriber:
         for transcript in data.get('transcripts', []):
             for sentence in transcript.get('sentences', []):
                 texts.append(sentence['text'])
-                all_sentences.append({
+                sentence_data = {
                     "text": sentence['text'],
                     "begin_time": sentence.get('begin_time', 0),
                     "end_time": sentence.get('end_time', 0),
-                })
+                    "words": []  # 词级时间戳
+                }
+                # 解析词级时间戳
+                for word in sentence.get('words', []):
+                    sentence_data["words"].append({
+                        "text": word.get('text', ''),
+                        "begin_time": word.get('begin_time', 0),
+                        "end_time": word.get('end_time', 0),
+                    })
+                all_sentences.append(sentence_data)
 
         # 获取音频时长
         duration = data.get('properties', {}).get(
