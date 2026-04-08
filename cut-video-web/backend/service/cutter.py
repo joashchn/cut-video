@@ -112,7 +112,9 @@ class VideoCutter:
             "-ss", str(start_sec),
             "-i", input_path,
             "-t", str(duration_sec),
-            "-c", "copy",  # 直接复制，不重新编码
+            "-c:v", "libx264",  # 重新编码视频
+            "-c:a", "aac",     # 重新编码音频
+            "-avoid_negative_ts", "make_zero",
             str(output_path),
         ]
 
@@ -135,7 +137,9 @@ class VideoCutter:
             "-f", "concat",
             "-safe", "0",
             "-i", str(concat_list),
-            "-c", "copy",
+            "-c:v", "libx264",
+            "-c:a", "aac",
+            "-shortest",
             str(output_path),
         ]
 
@@ -147,6 +151,49 @@ class VideoCutter:
 
         if result.returncode != 0:
             raise RuntimeError(f"视频合并失败: {result.stderr}")
+
+    def burn_subtitles(
+        self,
+        input_video: str,
+        subtitle_path: str,
+        output_filename: str,
+    ) -> str:
+        """
+        烧录字幕到视频
+
+        Args:
+            input_video: 输入视频路径（已剪辑的视频）
+            subtitle_path: SRT 字幕文件路径
+            output_filename: 输出文件名
+
+        Returns:
+            输出视频路径
+        """
+        output_path = self.output_dir / output_filename
+
+        # 使用 ffmpeg-full（支持 libass）
+        ffmpeg_path = "/opt/homebrew/opt/ffmpeg-full/bin/ffmpeg"
+
+        cmd = [
+            ffmpeg_path,
+            "-y",
+            "-i", input_video,
+            "-vf", f"subtitles='{subtitle_path}'",
+            "-c:v", "libx264",
+            "-c:a", "aac",
+            str(output_path),
+        ]
+
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+        )
+
+        if result.returncode != 0:
+            raise RuntimeError(f"字幕烧录失败: {result.stderr}")
+
+        return str(output_path)
 
     def get_duration(self, video_path: str) -> float:
         """获取视频时长（秒）"""

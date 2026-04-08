@@ -1,475 +1,724 @@
 /**
- * ASR 词级视频剪辑 - 前端逻辑
+ * ASR 视频剪辑工作室 - 前端逻辑
  */
 
-// 全局状态
-const state = {
-    videoId: null,
-    filename: null,
-    duration: 0,
-    sentences: [],
-    history: [],  // 撤销历史
-    currentTimeUpdate: null,
-};
+(function() {
+    'use strict';
 
-// DOM 元素
-const elements = {
-    // 上传
-    uploadSection: document.getElementById('upload-section'),
-    dropZone: document.getElementById('drop-zone'),
-    fileInput: document.getElementById('file-input'),
-    browseLink: document.getElementById('browse-link'),
+    // ==================== STATE ====================
+    const state = {
+        videoId: null,
+        filename: null,
+        duration: 0,
+        sentences: [],
+        history: [],
+        outputFilename: null,
+        currentWordIndex: -1,
+        burnSubtitles: false,
+    };
 
-    // 加载
-    loadingSection: document.getElementById('loading-section'),
-    loadingText: document.getElementById('loading-text'),
+    // ==================== DOM ====================
+    const $ = id => document.getElementById(id);
 
-    // 编辑
-    editSection: document.getElementById('edit-section'),
-    videoPlayer: document.getElementById('video-player'),
-    videoFilename: document.getElementById('video-filename'),
-    videoDuration: document.getElementById('video-duration'),
-    subtitleList: document.getElementById('subtitle-list'),
-    btnUndo: document.getElementById('btn-undo'),
-    btnReset: document.getElementById('btn-reset'),
-    btnExport: document.getElementById('btn-export'),
-    deletedCount: document.getElementById('deleted-count'),
+    const dom = {
+        // Views
+        viewUpload: $('view-upload'),
+        viewLoading: $('view-loading'),
+        viewEditor: $('view-editor'),
 
-    // 结果
-    resultSection: document.getElementById('result-section'),
-    resultFilename: document.getElementById('result-filename'),
-    btnDownload: document.getElementById('btn-download'),
-    btnNew: document.getElementById('btn-new'),
-    downloadFrame: document.getElementById('download-frame'),
-};
+        // Upload
+        uploadCard: $('upload-card'),
+        fileInput: $('file-input'),
 
-// ========== 上传功能 ==========
+        // Loading
+        loadingTitle: $('loading-title'),
+        loadingDesc: $('loading-desc'),
+        loadingBar: $('loading-bar'),
 
-function initUpload() {
-    // 点击浏览
-    elements.browseLink.addEventListener('click', (e) => {
-        e.preventDefault();
-        elements.fileInput.click();
-    });
+        // Header
+        btnPlay: $('btn-play'),
+        btnBack: $('btn-back'),
+        btnForward: $('btn-forward'),
+        btnUndo: $('btn-undo'),
+        btnReset: $('btn-reset'),
+        btnExport: $('btn-export'),
+        toggleSubtitles: $('toggle-subtitles'),
+        timeCurrent: $('time-current'),
+        timeTotal: $('time-total'),
 
-    // 文件选择
-    elements.fileInput.addEventListener('change', (e) => {
+        // Video
+        videoPlayer: $('video-player'),
+        progressBar: $('progress-bar'),
+        progressFill: $('progress-fill'),
+        progressThumb: $('progress-thumb'),
+        currentWordBadge: $('current-word-badge'),
+        fileLabel: $('file-label'),
+
+        // Timeline
+        timelineRuler: $('timeline-ruler'),
+        timelineTrack: $('timeline-track'),
+
+        // Word List
+        wordList: $('word-list'),
+
+        // Stats
+        statDeleted: $('stat-deleted'),
+        statTotal: $('stat-total'),
+
+        // Modal
+        modalResult: $('modal-result'),
+        modalKept: $('modal-kept'),
+        btnDownload: $('btn-download'),
+        btnNew: $('btn-new'),
+        downloadFrame: $('download-frame'),
+
+        // Toast
+        toastContainer: $('toast-container'),
+    };
+
+    // ==================== INIT ====================
+    function init() {
+        initUpload();
+        initVideoPlayer();
+        initTransport();
+        initActions();
+        initModal();
+        initKeyboard();
+        initSubtitleToggle();
+    }
+
+    // ==================== UPLOAD ====================
+    function initUpload() {
+        dom.uploadCard.addEventListener('click', () => dom.fileInput.click());
+        dom.fileInput.addEventListener('change', handleFileSelect);
+
+        dom.uploadCard.addEventListener('dragover', e => {
+            e.preventDefault();
+            dom.uploadCard.classList.add('dragover');
+        });
+
+        dom.uploadCard.addEventListener('dragleave', () => {
+            dom.uploadCard.classList.remove('dragover');
+        });
+
+        dom.uploadCard.addEventListener('drop', e => {
+            e.preventDefault();
+            dom.uploadCard.classList.remove('dragover');
+            if (e.dataTransfer.files.length > 0) {
+                handleFile(e.dataTransfer.files[0]);
+            }
+        });
+    }
+
+    function handleFileSelect(e) {
         if (e.target.files.length > 0) {
             handleFile(e.target.files[0]);
         }
-    });
-
-    // 拖拽
-    elements.dropZone.addEventListener('dragover', (e) => {
-        e.preventDefault();
-        elements.dropZone.classList.add('dragover');
-    });
-
-    elements.dropZone.addEventListener('dragleave', () => {
-        elements.dropZone.classList.remove('dragover');
-    });
-
-    elements.dropZone.addEventListener('drop', (e) => {
-        e.preventDefault();
-        elements.dropZone.classList.remove('dragover');
-        if (e.dataTransfer.files.length > 0) {
-            handleFile(e.dataTransfer.files[0]);
-        }
-    });
-}
-
-async function handleFile(file) {
-    if (!file.type.startsWith('video/')) {
-        alert('请选择视频文件');
-        return;
     }
 
-    showSection('loading');
-    updateLoadingText('正在上传视频...');
-
-    const formData = new FormData();
-    formData.append('file', file);
-
-    try {
-        const response = await fetch('/api/upload', {
-            method: 'POST',
-            body: formData,
-        });
-
-        if (!response.ok) {
-            throw new Error('上传失败');
-        }
-
-        const data = await response.json();
-        state.videoId = data.video_id;
-        state.filename = data.filename;
-
-        updateLoadingText('视频上传完成，正在进行 ASR 转写（v1 + 热词）...');
-
-        // 开始轮询状态
-        pollStatus();
-
-    } catch (error) {
-        alert('上传失败: ' + error.message);
-        showSection('upload');
-    }
-}
-
-async function pollStatus() {
-    const maxPolls = 300;  // 最多 5 分钟（每 1 秒一次）
-    let polls = 0;
-
-    const poll = async () => {
-        if (polls++ > maxPolls) {
-            alert('转写超时，请重试');
-            showSection('upload');
+    async function handleFile(file) {
+        if (!file.type.startsWith('video/')) {
+            showToast('请选择视频文件', 'error');
             return;
         }
 
+        showView('loading');
+        updateLoading('正在上传...', '视频上传中，请稍候...');
+
+        const formData = new FormData();
+        formData.append('file', file);
+
         try {
-            const response = await fetch(`/api/status/${state.videoId}`);
-            const data = await response.json();
-
-            if (data.status === 'done') {
-                // 转写完成，加载数据
-                await loadTranscription();
-            } else if (data.status === 'error') {
-                alert('转写失败: ' + data.error);
-                showSection('upload');
-            } else {
-                // 继续轮询
-                setTimeout(poll, 1000);
-            }
-        } catch (error) {
-            console.error('轮询状态失败:', error);
-            setTimeout(poll, 1000);
-        }
-    };
-
-    poll();
-}
-
-async function loadTranscription() {
-    updateLoadingText('正在加载转写结果...');
-
-    try {
-        const response = await fetch(`/api/timestamps/${state.videoId}`);
-        const data = await response.json();
-
-        state.sentences = data.sentences;
-        state.duration = data.duration;
-
-        // 加载视频
-        elements.videoPlayer.src = `/api/video/${state.videoId}`;
-
-        // 渲染字幕
-        renderSubtitles();
-
-        // 显示编辑界面
-        showSection('edit');
-        updateDeletedCount();
-
-    } catch (error) {
-        alert('加载转写结果失败: ' + error.message);
-        showSection('upload');
-    }
-}
-
-// ========== 字幕渲染 ==========
-
-function renderSubtitles() {
-    elements.subtitleList.innerHTML = '';
-
-    let wordIndex = 0;
-
-    state.sentences.forEach((sentence, sentenceIdx) => {
-        const block = document.createElement('div');
-        block.className = 'sentence-block';
-
-        // 时间显示
-        const timeSpan = document.createElement('div');
-        timeSpan.className = 'sentence-time';
-        timeSpan.textContent = formatTime(sentence.begin_time / 1000) + ' → ' + formatTime(sentence.end_time / 1000);
-        block.appendChild(timeSpan);
-
-        // 词
-        const wordsDiv = document.createElement('div');
-        wordsDiv.className = 'sentence-words';
-
-        sentence.words.forEach((word) => {
-            const wordSpan = document.createElement('span');
-            wordSpan.className = 'word';
-            wordSpan.textContent = word.text;
-            wordSpan.dataset.globalIndex = wordIndex++;
-
-            // 恢复删除状态
-            if (word.deleted) {
-                wordSpan.classList.add('deleted');
-            }
-
-            // 点击切换删除状态
-            wordSpan.addEventListener('click', () => toggleWord(wordIdx - 1, sentenceIdx, wordSpan));
-
-            // 鼠标悬停同步视频时间
-            wordSpan.addEventListener('mouseenter', () => {
-                elements.videoPlayer.currentTime = word.begin_time / 1000;
+            const response = await fetch('/api/upload', {
+                method: 'POST',
+                body: formData,
             });
 
-            wordsDiv.appendChild(wordSpan);
+            if (!response.ok) throw new Error('上传失败');
+
+            const data = await response.json();
+            state.videoId = data.video_id;
+            state.filename = data.filename;
+            dom.fileLabel.textContent = data.filename;
+
+            updateLoading('ASR 转写中...', '视频上传完成，正在进行 ASR 转写（v1 + 热词）...');
+            pollStatus();
+
+        } catch (error) {
+            showToast('上传失败: ' + error.message, 'error');
+            showView('upload');
+        }
+    }
+
+    async function pollStatus() {
+        let polls = 0;
+        const maxPolls = 300;
+
+        const tick = async () => {
+            if (polls++ > maxPolls) {
+                showToast('转写超时，请重试', 'error');
+                showView('upload');
+                return;
+            }
+
+            try {
+                const response = await fetch(`/api/status/${state.videoId}`);
+                const data = await response.json();
+
+                if (data.status === 'done') {
+                    await loadTranscription();
+                } else if (data.status === 'error') {
+                    showToast('转写失败: ' + data.error, 'error');
+                    showView('upload');
+                } else if (data.status === 'processing') {
+                    const progress = Math.min(85, 20 + (polls / maxPolls) * 65);
+                    dom.loadingBar.style.width = progress + '%';
+                    setTimeout(tick, 1000);
+                } else {
+                    setTimeout(tick, 1000);
+                }
+            } catch (error) {
+                setTimeout(tick, 1000);
+            }
+        };
+
+        tick();
+    }
+
+    async function loadTranscription() {
+        updateLoading('加载中...', '正在解析转写结果...');
+
+        try {
+            const response = await fetch(`/api/timestamps/${state.videoId}`);
+            if (!response.ok) throw new Error('加载失败');
+
+            const data = await response.json();
+            state.sentences = data.sentences;
+            state.duration = data.duration;
+
+            dom.videoPlayer.src = `/api/video/${state.videoId}`;
+            dom.timeTotal.textContent = formatTimecode(state.duration);
+
+            renderTimeline();
+            renderWordList();
+            updateStats();
+
+            showView('editor');
+
+        } catch (error) {
+            showToast('加载失败: ' + error.message, 'error');
+            showView('upload');
+        }
+    }
+
+    // ==================== VIEW SWITCHING ====================
+    function showView(name) {
+        dom.viewUpload.classList.remove('active');
+        dom.viewLoading.classList.remove('active');
+        dom.viewEditor.classList.remove('active');
+
+        switch (name) {
+            case 'upload':
+                dom.viewUpload.classList.add('active');
+                break;
+            case 'loading':
+                dom.viewLoading.classList.add('active');
+                break;
+            case 'editor':
+                dom.viewEditor.classList.add('active');
+                break;
+        }
+    }
+
+    function updateLoading(title, desc) {
+        dom.loadingTitle.textContent = title;
+        dom.loadingDesc.textContent = desc;
+        dom.loadingBar.style.width = '20%';
+    }
+
+    // ==================== VIDEO PLAYER ====================
+    function initVideoPlayer() {
+        dom.videoPlayer.addEventListener('timeupdate', onTimeUpdate);
+        dom.videoPlayer.addEventListener('ended', () => setPlayState(false));
+
+        dom.progressBar.addEventListener('click', e => {
+            const rect = dom.progressBar.getBoundingClientRect();
+            const percent = (e.clientX - rect.left) / rect.width;
+            dom.videoPlayer.currentTime = percent * state.duration;
+        });
+    }
+
+    function onTimeUpdate() {
+        const current = dom.videoPlayer.currentTime;
+        const percent = (current / state.duration) * 100;
+
+        dom.progressFill.style.width = percent + '%';
+        dom.progressThumb.style.left = percent + '%';
+        dom.timeCurrent.textContent = formatTimecode(current);
+
+        highlightCurrentWord();
+    }
+
+    function setPlayState(playing) {
+        const iconPlay = dom.btnPlay.querySelector('.icon-play');
+        const iconPause = dom.btnPlay.querySelector('.icon-pause');
+
+        if (playing) {
+            iconPlay.style.display = 'none';
+            iconPause.style.display = 'block';
+        } else {
+            iconPlay.style.display = 'block';
+            iconPause.style.display = 'none';
+        }
+    }
+
+    // ==================== TRANSPORT ====================
+    function initTransport() {
+        dom.btnPlay.addEventListener('click', togglePlay);
+        dom.btnBack.addEventListener('click', () => seek(-5));
+        dom.btnForward.addEventListener('click', () => seek(5));
+    }
+
+    function togglePlay() {
+        if (dom.videoPlayer.paused) {
+            dom.videoPlayer.play();
+            setPlayState(true);
+        } else {
+            dom.videoPlayer.pause();
+            setPlayState(false);
+        }
+    }
+
+    function seek(seconds) {
+        dom.videoPlayer.currentTime = Math.max(0, Math.min(
+            dom.videoPlayer.currentTime + seconds,
+            state.duration
+        ));
+    }
+
+    // ==================== TIMELINE ====================
+    function renderTimeline() {
+        // Ruler
+        dom.timelineRuler.innerHTML = '';
+        const ticks = calculateTicks(state.duration);
+        ticks.forEach(tick => {
+            const el = document.createElement('div');
+            el.className = 'timeline-tick';
+            el.style.left = tick.percent + '%';
+            el.innerHTML = `<span class="timeline-tick-label">${tick.label}</span>`;
+            dom.timelineRuler.appendChild(el);
         });
 
-        block.appendChild(wordsDiv);
-        elements.subtitleList.appendChild(block);
-    });
+        // Word blocks
+        dom.timelineTrack.innerHTML = '';
+        const allWords = getAllWords();
 
-    // 视频时间更新时高亮当前词
-    elements.videoPlayer.addEventListener('timeupdate', highlightCurrentWord);
-}
+        allWords.forEach((word, index) => {
+            const block = document.createElement('div');
+            block.className = 'word-block';
+            block.dataset.index = index;
 
-function toggleWord(globalIdx, sentenceIdx, wordSpan) {
-    // 保存历史（用于撤销）
-    saveHistory();
+            const startPercent = (word.begin_time / (state.duration * 1000)) * 100;
+            const widthPercent = ((word.end_time - word.begin_time) / (state.duration * 1000)) * 100;
 
-    // 切换状态
-    const sentence = state.sentences[sentenceIdx];
-    const word = sentence.words.find((w, i) => {
-        // 重新计算全局索引
+            block.style.left = startPercent + '%';
+            block.style.width = Math.max(widthPercent, 2) + '%';
+            block.textContent = word.text.length > 6 ? word.text.slice(0, 6) : word.text;
+
+            block.addEventListener('click', () => toggleWordByGlobalIndex(index));
+
+            dom.timelineTrack.appendChild(block);
+        });
+    }
+
+    function calculateTicks(duration) {
+        const ticks = [];
+        const seconds = Math.ceil(duration);
+
+        let interval = 1;
+        if (seconds > 300) interval = 30;
+        else if (seconds > 120) interval = 15;
+        else if (seconds > 60) interval = 10;
+        else if (seconds > 30) interval = 5;
+
+        for (let i = 0; i <= seconds; i += interval) {
+            ticks.push({
+                percent: (i / seconds) * 100,
+                label: formatTimeShort(i)
+            });
+        }
+
+        return ticks;
+    }
+
+    function updateTimelineHighlights() {
+        const allWords = getAllWords();
+        const blocks = dom.timelineTrack.querySelectorAll('.word-block');
+
+        blocks.forEach((block, index) => {
+            block.classList.toggle('deleted', allWords[index].deleted);
+        });
+    }
+
+    // ==================== WORD LIST ====================
+    function renderWordList() {
+        dom.wordList.innerHTML = '';
+
+        state.sentences.forEach((sentence, sIdx) => {
+            const block = document.createElement('div');
+            block.className = 'sentence-block';
+
+            // 点击句子块任意非字幕区域删除整个句子
+            block.addEventListener('click', e => {
+                // 如果点击的是单词本身，不处理
+                if (e.target.classList.contains('word')) return;
+                toggleSentence(sIdx);
+            });
+
+            const time = document.createElement('div');
+            time.className = 'sentence-time';
+            time.textContent = `${formatTimecode(sentence.begin_time / 1000)} → ${formatTimecode(sentence.end_time / 1000)}`;
+            block.appendChild(time);
+
+            const words = document.createElement('div');
+            words.className = 'sentence-words';
+
+            sentence.words.forEach((word, wIdx) => {
+                const el = document.createElement('span');
+                el.className = 'word';
+                el.textContent = word.text;
+                el.dataset.sentenceIdx = sIdx;
+                el.dataset.wordIdx = wIdx;
+
+                if (word.deleted) el.classList.add('deleted');
+
+                el.addEventListener('click', e => {
+                    e.stopPropagation();
+                    toggleWord(sIdx, wIdx, el);
+                });
+
+                words.appendChild(el);
+            });
+
+            block.appendChild(words);
+            dom.wordList.appendChild(block);
+        });
+    }
+
+    function highlightCurrentWord() {
+        const currentTime = dom.videoPlayer.currentTime * 1000;
+        const allWords = getAllWords();
+
+        // Clear all
+        document.querySelectorAll('.word.current').forEach(el => el.classList.remove('current'));
+        document.querySelectorAll('.word-block.current').forEach(el => el.classList.remove('current'));
+
+        // Find current
+        let currentIdx = -1;
+        for (let i = 0; i < allWords.length; i++) {
+            if (currentTime >= allWords[i].begin_time && currentTime < allWords[i].end_time) {
+                currentIdx = i;
+                break;
+            }
+        }
+
+        if (currentIdx >= 0 && currentIdx !== state.currentWordIndex) {
+            state.currentWordIndex = currentIdx;
+            const word = allWords[currentIdx];
+
+            // Badge
+            dom.currentWordBadge.textContent = word.text;
+            dom.currentWordBadge.classList.add('visible');
+
+            // Word in list
+            const wordEls = dom.wordList.querySelectorAll('.word');
+            if (wordEls[currentIdx]) {
+                wordEls[currentIdx].classList.add('current');
+                wordEls[currentIdx].scrollIntoView({ behavior: 'smooth', block: 'center' });
+            }
+
+            // Word block
+            const blockEls = dom.timelineTrack.querySelectorAll('.word-block');
+            if (blockEls[currentIdx]) {
+                blockEls[currentIdx].classList.add('current');
+            }
+        }
+    }
+
+    // ==================== WORD TOGGLE ====================
+    function getAllWords() {
+        const words = [];
+        state.sentences.forEach(s => s.words.forEach(w => words.push(w)));
+        return words;
+    }
+
+    function getGlobalIndex(sentenceIdx, wordIdx) {
         let idx = 0;
         for (let s = 0; s < sentenceIdx; s++) {
             idx += state.sentences[s].words.length;
         }
-        idx += i;
-        return idx === globalIdx;
-    });
-
-    if (word) {
-        word.deleted = !word.deleted;
-        wordSpan.classList.toggle('deleted');
-
-        // seek 到该词时间点
-        elements.videoPlayer.currentTime = word.begin_time / 1000;
+        return idx + wordIdx;
     }
 
-    updateDeletedCount();
-    updateButtonStates();
-}
+    function toggleWord(sentenceIdx, wordIdx, element) {
+        saveHistory();
 
-function highlightCurrentWord() {
-    const currentTime = elements.videoPlayer.currentTime * 1000; // 转换为毫秒
+        const word = state.sentences[sentenceIdx].words[wordIdx];
+        word.deleted = !word.deleted;
 
-    // 移除所有 current 样式
-    document.querySelectorAll('.word.current').forEach(el => {
-        el.classList.remove('current');
-    });
+        element.classList.toggle('deleted', word.deleted);
 
-    // 找到当前时间对应的词
-    for (const sentence of state.sentences) {
-        if (currentTime >= sentence.begin_time && currentTime < sentence.end_time) {
-            for (const word of sentence.words) {
-                if (currentTime >= word.begin_time && currentTime < word.end_time) {
-                    // 找到对应的 DOM 元素
-                    const wordEls = document.querySelectorAll('.word');
-                    let idx = 0;
-                    for (let s = 0; s < state.sentences.indexOf(sentence); s++) {
-                        idx += state.sentences[s].words.length;
-                    }
-                    idx += sentence.words.indexOf(word);
+        const globalIdx = getGlobalIndex(sentenceIdx, wordIdx);
+        const block = dom.timelineTrack.querySelector(`.word-block[data-index="${globalIdx}"]`);
+        if (block) block.classList.toggle('deleted', word.deleted);
 
-                    if (wordEls[idx]) {
-                        wordEls[idx].classList.add('current');
+        dom.videoPlayer.currentTime = word.begin_time / 1000;
 
-                        // 自动滚动到当前词
-                        wordEls[idx].scrollIntoView({
-                            behavior: 'smooth',
-                            block: 'center'
-                        });
+        updateStats();
+        updateButtonStates();
+    }
+
+    function toggleSentence(sentenceIdx) {
+        saveHistory();
+
+        const sentence = state.sentences[sentenceIdx];
+        const allDeleted = sentence.words.every(w => w.deleted);
+
+        sentence.words.forEach((word, wIdx) => {
+            word.deleted = !allDeleted;
+
+            const wordEl = dom.wordList.querySelector(
+                `.word[data-sentence-idx="${sentenceIdx}"][data-word-idx="${wIdx}"]`
+            );
+            if (wordEl) wordEl.classList.toggle('deleted', word.deleted);
+
+            const globalIdx = getGlobalIndex(sentenceIdx, wIdx);
+            const block = dom.timelineTrack.querySelector(`.word-block[data-index="${globalIdx}"]`);
+            if (block) block.classList.toggle('deleted', word.deleted);
+        });
+
+        dom.videoPlayer.currentTime = sentence.begin_time / 1000;
+
+        updateStats();
+        updateButtonStates();
+    }
+
+    function toggleWordByGlobalIndex(globalIdx) {
+        let idx = 0;
+        for (let s = 0; s < state.sentences.length; s++) {
+            for (let w = 0; w < state.sentences[s].words.length; w++) {
+                if (idx === globalIdx) {
+                    const wordEl = dom.wordList.querySelector(
+                        `.word[data-sentence-idx="${s}"][data-word-idx="${w}"]`
+                    );
+                    if (wordEl) toggleWord(s, w, wordEl);
+                    return;
+                }
+                idx++;
+            }
+        }
+    }
+
+    // ==================== HISTORY ====================
+    function saveHistory() {
+        state.history.push(JSON.parse(JSON.stringify(state.sentences)));
+        updateButtonStates();
+    }
+
+    function undo() {
+        if (!state.history.length) return;
+        state.sentences = state.history.pop();
+        renderWordList();
+        updateTimelineHighlights();
+        updateStats();
+        updateButtonStates();
+        showToast('已撤销');
+    }
+
+    function resetAll() {
+        if (!state.history.length) return;
+
+        state.sentences.forEach(s => s.words.forEach(w => w.deleted = false));
+        state.history = [];
+
+        renderWordList();
+        updateTimelineHighlights();
+        updateStats();
+        updateButtonStates();
+        showToast('已重置');
+    }
+
+    // ==================== ACTIONS ====================
+    function initActions() {
+        dom.btnUndo.addEventListener('click', undo);
+        dom.btnReset.addEventListener('click', resetAll);
+        dom.btnExport.addEventListener('click', exportVideo);
+    }
+
+    function updateStats() {
+        let deleted = 0, total = 0;
+        state.sentences.forEach(s => s.words.forEach(w => {
+            total++;
+            if (w.deleted) deleted++;
+        }));
+        dom.statDeleted.textContent = deleted;
+        dom.statTotal.textContent = total;
+    }
+
+    function updateButtonStates() {
+        const hasHistory = state.history.length > 0;
+        const hasDeleted = state.sentences.some(s => s.words.some(w => w.deleted));
+
+        dom.btnUndo.disabled = !hasHistory;
+        dom.btnReset.disabled = !hasHistory;
+        dom.btnExport.disabled = !hasDeleted;
+    }
+
+    // ==================== EXPORT ====================
+    async function exportVideo() {
+        dom.btnExport.disabled = true;
+
+        try {
+            const response = await fetch(`/api/cut/${state.videoId}`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    sentences: state.sentences,
+                    burn_subtitles: state.burnSubtitles,
+                }),
+            });
+
+            if (!response.ok) {
+                const err = await response.json();
+                throw new Error(err.detail || '导出失败');
+            }
+
+            const data = await response.json();
+            state.outputFilename = data.output_filename;
+
+            const kept = state.sentences.reduce((acc, s) =>
+                acc + s.words.filter(w => !w.deleted).length, 0
+            );
+            dom.modalKept.textContent = kept;
+
+            showModal();
+
+        } catch (error) {
+            showToast('导出失败: ' + error.message, 'error');
+        } finally {
+            dom.btnExport.disabled = false;
+        }
+    }
+
+    // ==================== MODAL ====================
+    function initModal() {
+        dom.btnDownload.addEventListener('click', () => {
+            if (state.outputFilename) {
+                dom.downloadFrame.src = `/api/download/${state.outputFilename}`;
+            }
+        });
+        dom.btnNew.addEventListener('click', startNew);
+    }
+
+    function showModal() {
+        dom.modalResult.classList.add('visible');
+    }
+
+    function hideModal() {
+        dom.modalResult.classList.remove('visible');
+    }
+
+    function startNew() {
+        hideModal();
+
+        state.videoId = null;
+        state.filename = null;
+        state.duration = 0;
+        state.sentences = [];
+        state.history = [];
+        state.outputFilename = null;
+        state.currentWordIndex = -1;
+
+        dom.fileInput.value = '';
+        dom.fileLabel.textContent = '—';
+        dom.videoPlayer.src = '';
+        dom.wordList.innerHTML = '';
+        dom.timelineTrack.innerHTML = '';
+        dom.timelineRuler.innerHTML = '';
+        dom.progressFill.style.width = '0%';
+        dom.progressThumb.style.left = '0%';
+        dom.timeCurrent.textContent = '00:00:00';
+        dom.timeTotal.textContent = '00:00:00';
+        dom.currentWordBadge.classList.remove('visible');
+
+        showView('upload');
+    }
+
+    // ==================== SUBTITLE TOGGLE ====================
+    function initSubtitleToggle() {
+        if (dom.toggleSubtitles) {
+            dom.toggleSubtitles.addEventListener('change', e => {
+                state.burnSubtitles = e.target.checked;
+            });
+        }
+    }
+
+    // ==================== KEYBOARD ====================
+    function initKeyboard() {
+        document.addEventListener('keydown', e => {
+            if (e.target.tagName === 'INPUT') return;
+
+            switch (e.code) {
+                case 'Space':
+                    e.preventDefault();
+                    if (dom.viewEditor.classList.contains('active')) togglePlay();
+                    break;
+                case 'ArrowLeft':
+                    e.preventDefault();
+                    seek(-1);
+                    break;
+                case 'ArrowRight':
+                    e.preventDefault();
+                    seek(1);
+                    break;
+                case 'KeyZ':
+                    if (e.metaKey || e.ctrlKey) {
+                        e.preventDefault();
+                        undo();
                     }
                     break;
-                }
             }
-            break;
-        }
-    }
-}
-
-// ========== 历史记录（撤销） ==========
-
-function saveHistory() {
-    // 深拷贝当前状态
-    const snapshot = JSON.parse(JSON.stringify(state.sentences));
-    state.history.push(snapshot);
-    updateButtonStates();
-}
-
-function undo() {
-    if (state.history.length === 0) return;
-
-    const previous = state.history.pop();
-    state.sentences = previous;
-
-    // 重新渲染
-    renderSubtitles();
-    updateDeletedCount();
-    updateButtonStates();
-}
-
-function resetAll() {
-    if (state.history.length === 0) return;
-
-    // 重置到初始状态（清空所有 deleted）
-    state.sentences.forEach(sentence => {
-        sentence.words.forEach(word => {
-            word.deleted = false;
         });
-    });
-    state.history = [];
-
-    renderSubtitles();
-    updateDeletedCount();
-    updateButtonStates();
-}
-
-// ========== 导出功能 ==========
-
-async function exportVideo() {
-    elements.btnExport.disabled = true;
-    elements.btnExport.textContent = '正在导出...';
-
-    try {
-        const response = await fetch(`/api/cut/${state.videoId}`, {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-            },
-            body: JSON.stringify({
-                sentences: state.sentences,
-            }),
-        });
-
-        if (!response.ok) {
-            const err = await response.json();
-            throw new Error(err.detail || '导出失败');
-        }
-
-        const data = await response.json();
-
-        // 显示结果
-        state.outputFilename = data.output_filename;
-        showSection('result');
-        elements.resultFilename.textContent = '已生成: ' + data.output_filename;
-
-    } catch (error) {
-        alert('导出失败: ' + error.message);
-    } finally {
-        elements.btnExport.disabled = false;
-        elements.btnExport.textContent = '导出剪辑视频';
     }
-}
 
-function downloadVideo() {
-    if (!state.outputFilename) return;
+    // ==================== TOAST ====================
+    function showToast(message, type = 'info') {
+        const toast = document.createElement('div');
+        toast.className = 'toast' + (type === 'error' ? ' error' : '');
+        toast.textContent = message;
+        dom.toastContainer.appendChild(toast);
 
-    // 通过 iframe 触发下载
-    elements.downloadFrame.src = `/api/download/${state.outputFilename}`;
-}
-
-// ========== UI 辅助函数 ==========
-
-function showSection(section) {
-    elements.uploadSection.classList.add('hidden');
-    elements.loadingSection.classList.add('hidden');
-    elements.editSection.classList.add('hidden');
-    elements.resultSection.classList.add('hidden');
-
-    switch (section) {
-        case 'upload':
-            elements.uploadSection.classList.remove('hidden');
-            break;
-        case 'loading':
-            elements.loadingSection.classList.remove('hidden');
-            break;
-        case 'edit':
-            elements.editSection.classList.remove('hidden');
-            elements.videoFilename.textContent = state.filename;
-            elements.videoDuration.textContent = formatTime(state.duration);
-            break;
-        case 'result':
-            elements.resultSection.classList.remove('hidden');
-            break;
+        setTimeout(() => {
+            toast.style.opacity = '0';
+            setTimeout(() => toast.remove(), 200);
+        }, 3000);
     }
-}
 
-function updateLoadingText(text) {
-    elements.loadingText.textContent = text;
-}
+    // ==================== UTILITIES ====================
+    function formatTimecode(seconds) {
+        const h = Math.floor(seconds / 3600);
+        const m = Math.floor((seconds % 3600) / 60);
+        const s = Math.floor(seconds % 60);
+        return `${h.toString().padStart(2, '0')}:${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
+    }
 
-function updateDeletedCount() {
-    let deletedCount = 0;
-    let totalCount = 0;
+    function formatTimeShort(seconds) {
+        const m = Math.floor(seconds / 60);
+        const s = Math.floor(seconds % 60);
+        return `${m}:${s.toString().padStart(2, '0')}`;
+    }
 
-    state.sentences.forEach(sentence => {
-        sentence.words.forEach(word => {
-            totalCount++;
-            if (word.deleted) deletedCount++;
-        });
-    });
+    // ==================== START ====================
+    document.addEventListener('DOMContentLoaded', init);
 
-    elements.deletedCount.textContent = `已删除: ${deletedCount} 个词 (共 ${totalCount} 个)`;
-}
-
-function updateButtonStates() {
-    elements.btnUndo.disabled = state.history.length === 0;
-    elements.btnReset.disabled = state.history.length === 0;
-
-    // 检查是否有删除的词
-    const hasDeleted = state.sentences.some(s =>
-        s.words.some(w => w.deleted)
-    );
-    elements.btnExport.disabled = !hasDeleted;
-}
-
-function formatTime(seconds) {
-    const mins = Math.floor(seconds / 60);
-    const secs = Math.floor(seconds % 60);
-    return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
-}
-
-function startNew() {
-    // 重置状态
-    state.videoId = null;
-    state.filename = null;
-    state.duration = 0;
-    state.sentences = [];
-    state.history = [];
-    state.outputFilename = null;
-
-    // 清空输入
-    elements.fileInput.value = '';
-
-    // 显示上传界面
-    showSection('upload');
-}
-
-// ========== 初始化 ==========
-
-function init() {
-    initUpload();
-
-    // 撤销
-    elements.btnUndo.addEventListener('click', undo);
-
-    // 重置
-    elements.btnReset.addEventListener('click', resetAll);
-
-    // 导出
-    elements.btnExport.addEventListener('click', exportVideo);
-
-    // 下载
-    elements.btnDownload.addEventListener('click', downloadVideo);
-
-    // 新建
-    elements.btnNew.addEventListener('click', startNew);
-}
-
-// 启动
-init();
+})();

@@ -243,6 +243,7 @@ sentences = [
 - 上传视频，自动 ASR 转写（**默认 v1 + 热词 + 词级时间戳**）
 - 词级时间戳显示，点击删除词组
 - 根据删除的词组剪辑视频
+- **字幕烧录**：可选择将字幕烧录到导出视频中
 
 ### 启动
 
@@ -251,7 +252,8 @@ sentences = [
 cd cut-video-web
 uv sync
 
-# 启动服务
+# 启动服务（需要设置 DASHSCOPE_API_KEY）
+export DASHSCOPE_API_KEY='your-api-key'
 uvicorn backend.main:app --reload --port 8000
 # 打开 http://localhost:8000
 ```
@@ -266,8 +268,15 @@ uvicorn backend.main:app --reload --port 8000
 2. 上传视频文件（拖拽或点击选择）
 3. 等待 ASR 转写完成（自动使用 v1 + 热词）
 4. 点击词标记删除（红色删除线）
-5. 点击"导出剪辑视频"
-6. 下载剪辑后的视频
+5. 勾选"烧录字幕"可选项
+6. 点击"执行剪辑"
+7. 下载剪辑后的视频
+
+### 字幕烧录功能
+
+- **按标点分割**：根据句子中的标点符号（，。！？等）自动分割成多条字幕
+- **智能过滤**：被删除的词不会出现在字幕中
+- **时间戳对齐**：字幕时间与剪辑后的视频精确对应
 
 ### 项目结构
 
@@ -279,7 +288,8 @@ cut-video-web/
 │   │   ├── video.py         # 视频上传、转写 API
 │   │   └── cut.py           # 视频剪辑 API
 │   └── service/
-│       └── cutter.py        # ffmpeg 剪辑逻辑
+│       ├── cutter.py        # ffmpeg 剪辑逻辑
+│       └── subtitle.py     # SRT 字幕生成
 ├── frontend/
 │   ├── index.html
 │   ├── app.js
