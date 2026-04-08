@@ -1,0 +1,21 @@
+[project]
+name = "cut-video-asr"
+version = "0.1.0"
+description = "ASR 语音识别工具，基于阿里云百炼 FunASR API"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "dashscope>=1.25.16",
+    "python-dotenv>=1.2.2",
+    "requests>=2.33.1",
+]
+
+[project.scripts]
+asr = "cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
