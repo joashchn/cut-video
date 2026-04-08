@@ -56,23 +56,17 @@ class HotwordManager:
             )
             return vocabulary_id
 
-        # v1 模型使用 AsrPhraseManager
-        phrases = []
-        for word, weight in phrase_dict.items():
-            phrases.append({
-                "text": word,
-                "weight": weight
-            })
-
+        # v1 模型使用 AsrPhraseManager（直接传字典，不需要转list）
         resp = AsrPhraseManager.create_phrases(
-            phrases=phrases,
+            phrases=phrase_dict,  # 直接传字典，如 {'word': weight}
             model=model
         )
 
         if resp.status_code != 200:
             raise RuntimeError(f"热词创建失败: {resp.code} {resp.message}")
 
-        return resp.output.phrase_id
+        # v1 返回 finetuned_output
+        return resp.output.finetuned_output
 
     @staticmethod
     def delete_phrases(hotword_id: str) -> bool:

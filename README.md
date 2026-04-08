@@ -10,7 +10,7 @@ ASR 语音识别工具，基于阿里云百炼 FunASR API。
 - **时间戳输出**（毫秒级）
 - **语气词过滤**
 - **视频文件支持**（自动用 ffmpeg 提取音频）
-- **热词支持**（v2 模型）
+- **热词支持**（v1 和 v2 模型）
 - 命令行工具 + Python API
 
 ## 环境准备
@@ -45,11 +45,14 @@ python cli.py audio.wav -o result.txt
 # 输出带时间戳的结果
 python cli.py audio.wav -t -o result.txt
 
-# 使用热词（v2 模型）
+# 使用热词（v1 或 v2 模型）
 python cli.py audio.wav -w hotwords.json -t -o result.txt
 
-# 使用 v1 模型（热词方式不同）
-python cli.py audio.wav -m paraformer-v1 -t -o result.txt
+# 使用 v1 模型
+python cli.py audio.wav -m paraformer-v1 -w hotwords.json -t -o result.txt
+
+# 使用 v2 模型
+python cli.py audio.wav -m paraformer-v2 -w hotwords.json -t -o result.txt
 ```
 
 ### CLI 选项
@@ -68,21 +71,28 @@ python cli.py audio.wav -m paraformer-v1 -t -o result.txt
 
 | 模型 | 说明 | 推荐场景 |
 |------|------|---------|
-| **paraformer-v2** | ✅ 默认，多语种支持更好，热词支持 | 直播、会议等多语种 |
-| paraformer-v1 | 中文效果好 | 访谈、讲座等中英文混合 |
+| **paraformer-v2** | ✅ 默认，多语种支持更好 | 直播、会议等多语种 |
+| paraformer-v1 | 中文效果好，热词支持 | 访谈、讲座等中英文混合 |
 
 ### 热词功能
 
-**v2 模型热词**使用 `VocabularyService`：
-
-```python
-# 热词配置 hotwords.json
+**热词配置 `hotwords.json`**:
+```json
 {
   "colleague": 3,
   "skill": 2,
   "反蒸馏": 4,
+  "数字生命": 5,
+  "HTTP": 2,
+  "运维": 5,
+  "网安": 5,
   "distill": 2,
-  "数字生命": 5
+  "anti": 2,
+  "AI": 2,
+  "赛博永生": 4,
+  "Paraformer": 2,
+  "热词": 2,
+  "缓存": 2
 }
 ```
 
@@ -103,9 +113,15 @@ transcriber = FunASRTranscriber()
 result = transcriber.transcribe(
     audio_file_path="audio.wav",
     model=ModelType.PARAFORMER_V2,
-    vocabulary_id="your_vocabulary_id",  # v2 热词
 )
 print(result.text)
+
+# v2 模型热词
+result = transcriber.transcribe(
+    audio_file_path="audio.wav",
+    model=ModelType.PARAFORMER_V2,
+    vocabulary_id="your_vocabulary_id",
+)
 
 # v1 模型热词
 result = transcriber.transcribe(
@@ -155,30 +171,37 @@ result = transcriber.transcribe(
 ### 工作流程
 
 ```
-本地 hotwords.json  →  VocabularyService.create_vocabulary()  →  vocabulary_id  →  转写时引用
+本地 hotwords.json  →  创建热词 API  →  获取 ID  →  转写时引用
 ```
 
 1. 读取本地 `hotwords.json` 配置
-2. 调用百炼 API 创建热词，获取 `vocabulary_id`
-3. 转写时传入 `vocabulary_id`，服务端使用已存储的热词增强识别
+2. 调用百炼 API 创建热词，获取 `phrase_id` (v1) 或 `vocabulary_id` (v2)
+3. 转写时传入对应 ID，服务端使用已存储的热词增强识别
 
-### v1 vs v2 热词
+### v1 vs v2 热词对比
 
-| 模型 | 热词 API | 参数 |
-|------|----------|------|
-| paraformer-v2 | VocabularyService | vocabulary_id |
-| paraformer-v1 | AsrPhraseManager | phrase_id |
+| 模型 | 热词 API | 返回 ID | 参数 |
+|------|----------|---------|------|
+| paraformer-v1 | AsrPhraseManager | finetuned_output | phrase_id |
+| paraformer-v2 | VocabularyService | vocabulary_id | vocabulary_id |
 
 ### 测试结果
 
 使用热词后，部分词汇识别有明显改善：
-- "反真流" → "反蒸馏"（热词生效）
-- "愿维兄弟" → "运维兄弟"（热词生效）
+
+| 词汇 | 无热词 | 有热词 | 热词配置 |
+|------|--------|--------|----------|
+| 愿维兄弟 → 运维兄弟 | ❌ | ✅ V1+V2 | `"运维": 5` |
+| 反真流 → 反蒸馏 | ❌ | ✅ V1+V2 | `"反蒸馏": 4` |
+| HTTB → HTTP | ❌ | ✅ V1 | `"HTTP": 2` |
+| 广安 → 网安 | ❌ | ✅ V1 | `"网安": 5` |
+
+**注意**: v1 和 v2 的热词是独立的，不能交叉使用。
 
 ## 参考文档
 
 - [阿里云百炼 FunASR 录音文件识别](https://help.aliyun.com/zh/model-studio/recording-file-recognition)
 - [Paraformer 录音文件识别 API](https://help.aliyun.com/zh/model-studio/paraformer-recorded-speech-recognition-python-api)
-- [Paraformer 热词定制与管理](https://help.aliyun.com/zh/model-studio/developer-reference/paraformer-asr-phrase-manager)
-- [定制热词配置使用与API参考](https://help.aliyun.com/zh/model-studio/custom-hot-words/)
+- [Paraformer 热词定制与管理(v1)](https://help.aliyun.com/zh/model-studio/developer-reference/paraformer-asr-phrase-manager)
+- [定制热词配置使用与API参考(v2)](https://help.aliyun.com/zh/model-studio/custom-hot-words/)
 - [DashScope SDK](https://github.com/dashscope/dashscope-sdk-python)
