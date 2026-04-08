@@ -237,6 +237,59 @@ sentences = [
 
 **注意**: v1 和 v2 的热词是独立的，不能交叉使用。
 
+## Web 界面（视频剪辑）
+
+### 功能
+- 上传视频，自动 ASR 转写（**默认 v1 + 热词 + 词级时间戳**）
+- 词级时间戳显示，点击删除词组
+- 根据删除的词组剪辑视频
+
+### 启动
+
+```bash
+# 安装依赖
+cd cut-video-web
+uv sync
+
+# 启动服务
+uvicorn backend.main:app --reload --port 8000
+# 打开 http://localhost:8000
+```
+
+### 默认配置
+- 模型：paraformer-v1（热词效果更好）
+- 热词：使用项目内置 hotwords.json
+- 时间戳：词级精度
+
+### 使用流程
+1. 打开 http://localhost:8000
+2. 上传视频文件（拖拽或点击选择）
+3. 等待 ASR 转写完成（自动使用 v1 + 热词）
+4. 点击词标记删除（红色删除线）
+5. 点击"导出剪辑视频"
+6. 下载剪辑后的视频
+
+### 项目结构
+
+```
+cut-video-web/
+├── backend/
+│   ├── main.py              # FastAPI 入口
+│   ├── router/
+│   │   ├── video.py         # 视频上传、转写 API
+│   │   └── cut.py           # 视频剪辑 API
+│   └── service/
+│       └── cutter.py        # ffmpeg 剪辑逻辑
+├── frontend/
+│   ├── index.html
+│   ├── app.js
+│   └── styles.css
+├── uploads/                  # 视频存储
+└── outputs/                  # 输出视频
+```
+
+---
+
 ## 参考文档
 
 - [阿里云百炼 FunASR 录音文件识别](https://help.aliyun.com/zh/model-studio/recording-file-recognition)

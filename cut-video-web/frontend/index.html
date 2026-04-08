@@ -1,0 +1,90 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ASR 词级视频剪辑</title>
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>ASR 词级视频剪辑</h1>
+            <p class="subtitle">基于阿里云百炼 FunASR API · 默认 v1 模型 + 热词 + 词级时间戳</p>
+        </header>
+
+        <!-- 上传区域 -->
+        <div id="upload-section" class="section">
+            <div class="upload-area" id="drop-zone">
+                <input type="file" id="file-input" accept="video/*" hidden>
+                <div class="upload-hint">
+                    <svg class="upload-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                        <polyline points="17 8 12 3 7 8"></polyline>
+                        <line x1="12" y1="3" x2="12" y2="15"></line>
+                    </svg>
+                    <p>拖拽视频文件到这里，或 <a href="#" id="browse-link">点击选择</a></p>
+                    <p class="upload-formats">支持 MP4, MOV, AVI, MKV 等格式</p>
+                </div>
+            </div>
+        </div>
+
+        <!-- 加载状态 -->
+        <div id="loading-section" class="section hidden">
+            <div class="loading">
+                <div class="spinner"></div>
+                <p id="loading-text">正在处理...</p>
+            </div>
+        </div>
+
+        <!-- 编辑区域 -->
+        <div id="edit-section" class="section hidden">
+            <div class="video-container">
+                <video id="video-player" controls></video>
+                <div class="video-info">
+                    <span id="video-filename"></span>
+                    <span id="video-duration"></span>
+                </div>
+            </div>
+
+            <div class="subtitle-container">
+                <div class="subtitle-header">
+                    <h2>词级字幕</h2>
+                    <div class="subtitle-actions">
+                        <button id="btn-undo" class="btn btn-secondary" disabled>撤销</button>
+                        <button id="btn-reset" class="btn btn-secondary" disabled>重置</button>
+                    </div>
+                </div>
+                <p class="subtitle-hint">点击词可标记删除（红色删除线），再次点击取消删除</p>
+                <div id="subtitle-list" class="subtitle-list"></div>
+            </div>
+
+            <div class="action-bar">
+                <button id="btn-export" class="btn btn-primary" disabled>导出剪辑视频</button>
+                <span id="deleted-count" class="deleted-count">已删除: 0 个词</span>
+            </div>
+        </div>
+
+        <!-- 导出结果 -->
+        <div id="result-section" class="section hidden">
+            <div class="result-success">
+                <svg class="check-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"></path>
+                    <polyline points="22 4 12 14.01 9 11.01"></polyline>
+                </svg>
+                <h2>剪辑完成!</h2>
+                <p id="result-filename"></p>
+                <div class="result-actions">
+                    <button id="btn-download" class="btn btn-primary">下载视频</button>
+                    <button id="btn-new" class="btn btn-secondary">处理新视频</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 隐藏的 iframe 用于下载 -->
+    <iframe id="download-frame" style="display:none;"></iframe>
+
+    <script src="app.js"></script>
+</body>
+</html>
