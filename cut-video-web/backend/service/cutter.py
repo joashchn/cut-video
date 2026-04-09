@@ -7,6 +7,7 @@ ffmpeg 视频剪辑服务
 import os
 import subprocess
 import tempfile
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import List, Tuple
 
@@ -47,12 +48,22 @@ class VideoCutter:
         with tempfile.TemporaryDirectory() as temp_dir:
             temp_path = Path(temp_dir)
 
-            # 提取每个保留段
-            segment_files = []
-            for i, (start_ms, end_ms) in enumerate(merged_segments):
-                segment_file = temp_path / f"seg_{i}.mp4"
-                self._extract_segment(input_path, start_ms, end_ms, segment_file)
-                segment_files.append(segment_file)
+            # 并行提取所有保留段（显著加速）
+            segment_files = [None] * len(merged_segments)
+            max_workers = min(len(merged_segments), os.cpu_count() or 4)
+
+            with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                futures = {}
+                for i, (start_ms, end_ms) in enumerate(merged_segments):
+                    segment_file = temp_path / f"seg_{i}.mp4"
+                    segment_files[i] = segment_file
+                    future = executor.submit(
+                        self._extract_segment, input_path, start_ms, end_ms, segment_file
+                    )
+                    futures[future] = i
+
+                for future in as_completed(futures):
+                    future.result()  # 招出异常
 
             # 创建 concat 列表
             concat_list = temp_path / "concat_list.txt"
@@ -95,11 +106,10 @@ class VideoCutter:
         self, input_path: str, start_ms: int, end_ms: int, output_path: Path
     ):
         """
-        使用 ffmpeg 提取视频片段
+        使用 ffmpeg 提取视频片段（无损编码，帧精确裁剪）
 
-        注意：-ss 必须放在 -i 之后（output seeking），确保帧精确裁剪。
-        放在 -i 之前（input seeking）虽然快但会跳到最近关键帧，
-        对短片段可能导致 0 个视频帧被提取（只剩音频）。
+        -ss 放在 -i 之后（output seeking）确保帧精确裁剪，保证字幕同步。
+        使用 CRF=0 + ultrafast 无损编码，最大化编码速度。
 
         Args:
             input_path: 输入视频
@@ -114,13 +124,15 @@ class VideoCutter:
             "ffmpeg",
             "-y",
             "-i", input_path,
-            "-ss", str(start_sec),       # 放在 -i 之后：帧精确裁剪
+            "-ss", str(start_sec),       # output seeking: 帧精确裁剪
             "-t", str(duration_sec),
             "-c:v", "libx264",
-            "-c:a", "aac",
+            "-crf", "0",                 # 无损
+            "-preset", "ultrafast",      # 最快编码速度（CRF=0时不影响质量）
+            "-c:a", "aac", "-b:a", "320k",
             "-avoid_negative_ts", "make_zero",
-            "-map", "0:v:0",             # 显式映射视频流
-            "-map", "0:a:0?",            # 显式映射音频流（可选）
+            "-map", "0:v:0",
+            "-map", "0:a:0?",
             str(output_path),
         ]
 
@@ -219,7 +231,9 @@ class VideoCutter:
             "-i", input_video,
             "-vf", vf,
             "-c:v", "libx264",
-            "-c:a", "aac",
+            "-crf", "0",                 # 无损编码
+            "-preset", "fast",           # 无损时 fast 不影响质量，只影响编码速度
+            "-c:a", "copy",              # 音频流复制，不重编码
             str(output_path),
         ]
 

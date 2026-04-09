@@ -400,15 +400,23 @@
                 if (word.deleted) el.classList.add('deleted');
                 if (word.edited_text && !isSilence) el.classList.add('edited');
 
-                el.addEventListener('click', e => {
-                    e.stopPropagation();
-                    toggleWord(sIdx, wIdx, el);
-                });
-
                 if (!isSilence) {
+                    // 单击延迟 + 双击取消机制，避免编辑/删除冲突
+                    let clickTimer = null;
+                    el.addEventListener('click', e => {
+                        e.stopPropagation();
+                        if (clickTimer) { clearTimeout(clickTimer); clickTimer = null; return; }
+                        clickTimer = setTimeout(() => { clickTimer = null; toggleWord(sIdx, wIdx, el); }, 250);
+                    });
                     el.addEventListener('dblclick', e => {
                         e.stopPropagation();
+                        if (clickTimer) { clearTimeout(clickTimer); clickTimer = null; }
                         startEditWord(sIdx, wIdx, el);
+                    });
+                } else {
+                    el.addEventListener('click', e => {
+                        e.stopPropagation();
+                        toggleWord(sIdx, wIdx, el);
                     });
                 }
 
@@ -1004,27 +1012,33 @@
         dom.btnExport.disabled = true;
 
         try {
-            // 先弹出原生保存对话框，让用户选择保存位置
             const originalName = (state.filename || 'video').replace(/\.[^.]+$/, '');
-            let fileHandle;
-            try {
-                fileHandle = await window.showSaveFilePicker({
-                    suggestedName: `${originalName}_cut.mp4`,
-                    types: [{
-                        description: 'MP4 视频',
-                        accept: { 'video/mp4': ['.mp4'] },
-                    }],
-                });
-            } catch (e) {
-                // 用户取消了对话框
-                dom.btnExport.disabled = !state.previewMode;
-                return;
+            const suggestedName = `${originalName}_cut.mp4`;
+
+            // 尝试使用原生保存对话框（Chrome/Edge），不支持则降级为传统下载
+            const hasFilePicker = typeof window.showSaveFilePicker === 'function';
+            let fileHandle = null;
+
+            if (hasFilePicker) {
+                try {
+                    fileHandle = await window.showSaveFilePicker({
+                        suggestedName,
+                        types: [{
+                            description: 'MP4 视频',
+                            accept: { 'video/mp4': ['.mp4'] },
+                        }],
+                    });
+                } catch (e) {
+                    // 用户取消
+                    dom.btnExport.disabled = !state.previewMode;
+                    return;
+                }
             }
 
             // 显示导出进度弹窗
             showExportModal();
 
-            // 后端导出（生成最终文件）
+            // 后端导出
             const response = await fetch(`/api/export/${state.videoId}`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
@@ -1042,17 +1056,29 @@
 
             const data = await response.json();
 
-            // 下载文件并写入用户选择的位置
+            // 下载文件
             const downloadResp = await fetch(`/api/download/${data.output_filename}`);
             if (!downloadResp.ok) throw new Error('下载导出文件失败');
-
             const blob = await downloadResp.blob();
-            const writable = await fileHandle.createWritable();
-            await writable.write(blob);
-            await writable.close();
 
-            // 显示导出完成
-            showExportSuccess(fileHandle.name);
+            if (fileHandle) {
+                // File System Access API — 写入用户选择的位置
+                const writable = await fileHandle.createWritable();
+                await writable.write(blob);
+                await writable.close();
+                showExportSuccess(fileHandle.name);
+            } else {
+                // Fallback — 传统浏览器下载
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = suggestedName;
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+                URL.revokeObjectURL(url);
+                showExportSuccess(suggestedName);
+            }
 
         } catch (error) {
             showExportError(error.message);
