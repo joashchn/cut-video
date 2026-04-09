@@ -29,16 +29,30 @@ OUTPUTS_DIR.mkdir(exist_ok=True)
 
 
 class CutRequest(BaseModel):
-    """剪辑请求"""
+    """剪辑预览请求"""
     sentences: list  # 更新了 deleted 状态的 sentences 数据
-    burn_subtitles: bool = False  # 是否烧录字幕
 
 
 class CutResponse(BaseModel):
-    """剪辑响应"""
+    """剪辑预览响应"""
     output_id: str
     output_filename: str
-    subtitle_filename: Optional[str] = None  # 字幕文件名（烧录时返回）
+    kept_segments: Optional[list] = None  # [(start_ms, end_ms), ...] 用于字幕时间映射
+    message: str
+
+
+class ExportRequest(BaseModel):
+    """导出请求"""
+    preview_filename: str  # 预览视频文件名
+    sentences: list  # 当前 sentences 数据（用于生成字幕）
+    burn_subtitles: bool = False  # 是否烧录字幕
+
+
+class ExportResponse(BaseModel):
+    """导出响应"""
+    output_id: str
+    output_filename: str
+    subtitle_filename: Optional[str] = None
     message: str
 
 
@@ -51,7 +65,7 @@ class WordDeleteRequest(BaseModel):
 @router.post("/cut/{video_id}", response_model=CutResponse)
 async def cut_video(video_id: str, request: CutRequest):
     """
-    根据删除的词剪辑视频
+    生成剪辑预览视频（不含字幕）
 
     请求体包含更新了 deleted 状态的 sentences 数据
     """
@@ -69,7 +83,14 @@ async def cut_video(video_id: str, request: CutRequest):
 
     try:
         # 执行剪辑
-        output_filename = f"cut_{video_id}_{uuid.uuid4().hex[:8]}.mp4"
+        # 清理同 video_id 的旧预览文件
+        for old_preview in OUTPUTS_DIR.glob(f"preview_{video_id}_*.mp4"):
+            try:
+                old_preview.unlink()
+            except OSError:
+                pass
+
+        output_filename = f"preview_{video_id}_{uuid.uuid4().hex[:8]}.mp4"
         output_path = OUTPUTS_DIR / output_filename
 
         # 使用 cutter 服务
@@ -172,28 +193,152 @@ async def cut_video(video_id: str, request: CutRequest):
 
             cutter.cut_video(input_path, kept_segments, output_filename)
 
-        subtitle_filename = None
-        if request.burn_subtitles:
-            # 生成字幕文件（传递 kept_segments 以计算相对时间戳）
-            subtitle_gen = SubtitleGenerator(str(OUTPUTS_DIR))
-            subtitle_filename = f"sub_{video_id}_{uuid.uuid4().hex[:8]}.srt"
-            subtitle_gen.generate_srt(request.sentences, subtitle_filename, kept_segments)
-            subtitle_path = OUTPUTS_DIR / subtitle_filename
-
-            # 烧录字幕到视频
-            output_with_subs = f"cut_sub_{video_id}_{uuid.uuid4().hex[:8]}.mp4"
-            cutter.burn_subtitles(str(output_path), str(subtitle_path), output_with_subs)
-            output_filename = output_with_subs
-
         return CutResponse(
             output_id=video_id,
             output_filename=output_filename,
-            subtitle_filename=subtitle_filename,
-            message="剪辑完成",
+            kept_segments=kept_segments if deleted_ranges else None,
+            message="预览视频已生成",
         )
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/export/{video_id}", response_model=ExportResponse)
+async def export_video(video_id: str, request: ExportRequest):
+    """
+    导出最终视频
+
+    基于预览视频，可选烧录字幕后导出
+    """
+    preview_path = OUTPUTS_DIR / request.preview_filename
+    if not preview_path.exists():
+        raise HTTPException(status_code=404, detail="预览视频不存在，请重新执行剪辑")
+
+    try:
+        if not request.burn_subtitles:
+            # 无需烧录字幕，直接使用预览视频
+            return ExportResponse(
+                output_id=video_id,
+                output_filename=request.preview_filename,
+                message="导出完成",
+            )
+
+        # 烧录字幕：需要 kept_segments 来计算相对时间戳
+        cutter = VideoCutter(str(OUTPUTS_DIR))
+
+        # 获取预览视频时长（即剪辑后时长）
+        preview_duration_ms = int(cutter.get_duration(str(preview_path)) * 1000)
+
+        # 构建 kept_segments（与 cut 端点相同的逻辑）
+        kept_segments = _build_kept_segments(request.sentences, cutter, video_id)
+
+        # 生成字幕文件
+        subtitle_gen = SubtitleGenerator(str(OUTPUTS_DIR))
+        subtitle_filename = f"sub_{video_id}_{uuid.uuid4().hex[:8]}.srt"
+        subtitle_gen.generate_srt(request.sentences, subtitle_filename, kept_segments)
+        subtitle_path = OUTPUTS_DIR / subtitle_filename
+
+        # 烧录字幕到预览视频
+        output_with_subs = f"cut_sub_{video_id}_{uuid.uuid4().hex[:8]}.mp4"
+        cutter.burn_subtitles(str(preview_path), str(subtitle_path), output_with_subs)
+
+        return ExportResponse(
+            output_id=video_id,
+            output_filename=output_with_subs,
+            subtitle_filename=subtitle_filename,
+            message="导出完成（含字幕）",
+        )
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+def _build_kept_segments(sentences: list, cutter: VideoCutter, video_id: str) -> list:
+    """
+    根据 sentences 构建 kept_segments（复用反向剔除逻辑）
+
+    用于字幕时间戳映射
+    """
+    PADDING_MS = 30
+
+    # 预处理：自动删除被删除词包围的静默标记
+    for sentence in sentences:
+        words = sentence.get("words", [])
+        for i, word in enumerate(words):
+            if word.get("type") == "silence" and not word.get("deleted", False):
+                prev_deleted = True
+                next_deleted = True
+                for j in range(i - 1, -1, -1):
+                    if words[j].get("type") != "silence":
+                        prev_deleted = words[j].get("deleted", False)
+                        break
+                for j in range(i + 1, len(words)):
+                    if words[j].get("type") != "silence":
+                        next_deleted = words[j].get("deleted", False)
+                        break
+                if prev_deleted and next_deleted:
+                    word["deleted"] = True
+
+    # 收集删除段
+    deleted_ranges = []
+    for sentence in sentences:
+        for word in sentence.get("words", []):
+            if word.get("deleted", False):
+                deleted_ranges.append((word["begin_time"], word["end_time"]))
+
+    if not deleted_ranges:
+        return None  # 无删除，无需时间映射
+
+    # 获取原始视频时长
+    video_extensions = {'.mp4', '.mov', '.avi', '.mkv', '.webm', '.flv', '.wmv'}
+    video_files = [
+        f for f in UPLOADS_DIR.glob(f"{video_id}_*")
+        if f.suffix.lower() in video_extensions
+    ]
+    if not video_files:
+        return None
+
+    video_duration_ms = int(cutter.get_duration(str(video_files[0])) * 1000)
+
+    # 合并重叠删除段
+    deleted_ranges.sort(key=lambda x: x[0])
+    merged_deleted = [deleted_ranges[0]]
+    for curr in deleted_ranges[1:]:
+        last = merged_deleted[-1]
+        if curr[0] <= last[1] + PADDING_MS:
+            merged_deleted[-1] = (last[0], max(last[1], curr[1]))
+        else:
+            merged_deleted.append(curr)
+
+    # 构建补集
+    kept_segments = []
+    cursor = 0
+    for del_start, del_end in merged_deleted:
+        seg_start = cursor
+        seg_end = max(cursor, del_start - PADDING_MS)
+        if seg_end > seg_start:
+            kept_segments.append((seg_start, seg_end))
+        cursor = del_end + PADDING_MS
+
+    if cursor < video_duration_ms:
+        kept_segments.append((cursor, video_duration_ms))
+
+    # 过滤无内容段
+    filtered = []
+    for seg_start, seg_end in kept_segments:
+        seg_has_content = any(
+            not w.get("deleted", False)
+            and w.get("type") != "silence"
+            and w["begin_time"] < seg_end
+            and w["end_time"] > seg_start
+            for sent in sentences
+            for w in sent.get("words", [])
+        )
+        if seg_has_content:
+            filtered.append((seg_start, seg_end))
+
+    return filtered if filtered else None
 
 
 @router.get("/download/{filename}")

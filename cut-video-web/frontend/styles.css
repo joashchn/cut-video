@@ -599,6 +599,27 @@ button:disabled {
     opacity: 1;
 }
 
+/* Preview Badge */
+.preview-badge {
+    position: absolute;
+    top: 8px;
+    left: 8px;
+    padding: 3px 10px;
+    background: rgba(234, 88, 12, 0.85);
+    color: #fff;
+    font-size: 0.7rem;
+    font-weight: 600;
+    border-radius: 4px;
+    letter-spacing: 0.05em;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.2s;
+}
+
+.preview-badge.visible {
+    opacity: 1;
+}
+
 /* Video Controls - below video */
 .video-controls {
     padding: var(--space-3) var(--space-4);

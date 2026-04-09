@@ -16,6 +16,10 @@
         currentWordIndex: -1,
         burnSubtitles: false,
         subtitleEntries: [], // [{start_ms, end_ms, text}, ...]
+        previewFilename: null,  // 当前预览文件名
+        previewMode: false,     // 是否处于预览模式
+        previewDuration: 0,     // 预览视频时长
+        previewSubtitleEntries: [], // 预览模式下的调整时间戳字幕
     };
 
     // ==================== DOM ====================
@@ -43,6 +47,7 @@
         btnUndo: $('btn-undo'),
         btnReset: $('btn-reset'),
         btnExport: $('btn-export'),
+        btnPreview: $('btn-preview'),
         toggleSubtitles: $('toggle-subtitles'),
         timeCurrent: $('time-current'),
         timeTotal: $('time-total'),
@@ -53,6 +58,7 @@
         progressFill: $('progress-fill'),
         progressThumb: $('progress-thumb'),
         subtitleOverlay: $('subtitle-overlay'),
+        previewBadge: $('preview-badge'),
         fileLabel: $('file-label'),
 
         // Timeline
@@ -247,19 +253,25 @@
         dom.progressBar.addEventListener('click', e => {
             const rect = dom.progressBar.getBoundingClientRect();
             const percent = (e.clientX - rect.left) / rect.width;
-            dom.videoPlayer.currentTime = percent * state.duration;
+            const totalDuration = state.previewMode ? state.previewDuration : state.duration;
+            dom.videoPlayer.currentTime = percent * totalDuration;
         });
     }
 
     function onTimeUpdate() {
         const current = dom.videoPlayer.currentTime;
-        const percent = (current / state.duration) * 100;
+        const totalDuration = state.previewMode ? state.previewDuration : state.duration;
+        const percent = totalDuration > 0 ? (current / totalDuration) * 100 : 0;
 
         dom.progressFill.style.width = percent + '%';
         dom.progressThumb.style.left = percent + '%';
         dom.timeCurrent.textContent = formatTimecode(current);
 
-        highlightCurrentWord();
+        if (state.previewMode) {
+            showPreviewSubtitle();
+        } else {
+            highlightCurrentWord();
+        }
     }
 
     function setPlayState(playing) {
@@ -467,6 +479,67 @@
 
     // ==================== SUBTITLE ENTRIES ====================
     /**
+     * 将原始时间映射到剪辑后时间（与 subtitle.py _map_original_to_adjusted 对齐）
+     */
+    function mapOriginalToAdjusted(originalMs, keptSegments) {
+        let cumulative = 0;
+        for (const [startMs, endMs] of keptSegments) {
+            if (originalMs < startMs) return cumulative;
+            if (originalMs <= endMs) return cumulative + (originalMs - startMs);
+            cumulative += (endMs - startMs);
+        }
+        return cumulative;
+    }
+
+    /**
+     * 构建预览模式的字幕条目（时间戳映射到剪辑后时间轴）
+     */
+    function buildPreviewSubtitleEntries(keptSegments) {
+        if (!keptSegments || !keptSegments.length) {
+            // 无删除（直接复制），使用原始字幕
+            state.previewSubtitleEntries = [...state.subtitleEntries];
+            return;
+        }
+
+        const entries = [];
+        for (const sentence of state.sentences) {
+            const words = sentence.words || [];
+            if (!words.length) continue;
+
+            const segments = splitWordsByPunctuation(sentence.text, words);
+            for (const segWords of segments) {
+                const kept = segWords.filter(w => !w.deleted && w.type !== 'silence');
+                if (!kept.length) continue;
+
+                const text = kept.map(w => w.edited_text || w.text).join('');
+                const adjStart = mapOriginalToAdjusted(kept[0].begin_time, keptSegments);
+                const adjEnd = mapOriginalToAdjusted(kept[kept.length - 1].end_time, keptSegments);
+
+                if (adjEnd > adjStart) {
+                    entries.push({ start_ms: adjStart, end_ms: adjEnd, text });
+                }
+            }
+        }
+        state.previewSubtitleEntries = entries;
+    }
+
+    /**
+     * 预览模式下显示字幕
+     */
+    function showPreviewSubtitle() {
+        const currentMs = dom.videoPlayer.currentTime * 1000;
+        const entry = state.previewSubtitleEntries.find(
+            e => currentMs >= e.start_ms && currentMs < e.end_ms
+        );
+        if (entry) {
+            dom.subtitleOverlay.textContent = entry.text;
+            dom.subtitleOverlay.classList.add('visible');
+        } else {
+            dom.subtitleOverlay.classList.remove('visible');
+        }
+    }
+
+    /**
      * 按标点分割词列表 - 与 subtitle.py _split_words_by_punctuation_positions 完全对齐
      */
     function splitWordsByPunctuation(sentenceText, words) {
@@ -597,6 +670,7 @@
             renderWordList();
             updateStats();
             updateButtonStates();
+            exitPreviewMode();
             buildSubtitleEntries();
         };
 
@@ -637,6 +711,7 @@
 
         dom.videoPlayer.currentTime = word.begin_time / 1000;
 
+        exitPreviewMode();
         updateStats();
         updateButtonStates();
         buildSubtitleEntries();
@@ -663,6 +738,7 @@
 
         dom.videoPlayer.currentTime = sentence.begin_time / 1000;
 
+        exitPreviewMode();
         updateStats();
         updateButtonStates();
         buildSubtitleEntries();
@@ -695,6 +771,7 @@
         state.sentences = state.history.pop();
         renderWordList();
         updateTimelineHighlights();
+        exitPreviewMode();
         updateStats();
         updateButtonStates();
         buildSubtitleEntries();
@@ -712,6 +789,7 @@
 
         renderWordList();
         updateTimelineHighlights();
+        exitPreviewMode();
         updateStats();
         updateButtonStates();
         buildSubtitleEntries();
@@ -722,6 +800,7 @@
     function initActions() {
         dom.btnUndo.addEventListener('click', undo);
         dom.btnReset.addEventListener('click', resetAll);
+        dom.btnPreview.addEventListener('click', previewVideo);
         dom.btnExport.addEventListener('click', exportVideo);
     }
 
@@ -743,7 +822,86 @@
 
         dom.btnUndo.disabled = !hasHistory;
         dom.btnReset.disabled = !hasHistory;
-        dom.btnExport.disabled = !hasDeleted;
+        dom.btnPreview.disabled = !hasDeleted;
+        // 导出按钮：仅在预览模式且未修改时可用
+        dom.btnExport.disabled = !state.previewMode;
+    }
+
+    // ==================== PREVIEW ====================
+    async function previewVideo() {
+        dom.btnPreview.disabled = true;
+
+        try {
+            showToast('正在生成预览...');
+
+            const response = await fetch(`/api/cut/${state.videoId}`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    sentences: state.sentences,
+                }),
+            });
+
+            if (!response.ok) {
+                const err = await response.json();
+                throw new Error(err.detail || '剪辑失败');
+            }
+
+            const data = await response.json();
+            state.previewFilename = data.output_filename;
+
+            // 构建预览字幕（映射到剪辑后时间轴）
+            buildPreviewSubtitleEntries(data.kept_segments);
+
+            // 进入预览模式
+            enterPreviewMode();
+
+            showToast('预览已生成，正在播放');
+
+        } catch (error) {
+            showToast('剪辑失败: ' + error.message, 'error');
+        } finally {
+            updateButtonStates();
+        }
+    }
+
+    function enterPreviewMode() {
+        state.previewMode = true;
+
+        // 切换视频源为预览文件
+        const previewUrl = `/api/download/${state.previewFilename}`;
+        dom.videoPlayer.src = previewUrl;
+        dom.videoPlayer.addEventListener('loadedmetadata', function onLoaded() {
+            dom.videoPlayer.removeEventListener('loadedmetadata', onLoaded);
+            state.previewDuration = dom.videoPlayer.duration;
+            dom.timeTotal.textContent = formatTimecode(state.previewDuration);
+            dom.videoPlayer.play();
+            setPlayState(true);
+        });
+
+        // 显示预览标签
+        dom.previewBadge.classList.add('visible');
+
+        updateButtonStates();
+    }
+
+    function exitPreviewMode() {
+        if (!state.previewMode) return;
+
+        state.previewMode = false;
+        state.previewFilename = null;
+        state.previewDuration = 0;
+        state.previewSubtitleEntries = [];
+
+        // 切回原始视频
+        dom.videoPlayer.src = `/api/video/${state.videoId}`;
+        dom.timeTotal.textContent = formatTimecode(state.duration);
+
+        // 隐藏预览标签
+        dom.previewBadge.classList.remove('visible');
+
+        updateButtonStates();
+        showToast('已修改内容，请重新执行剪辑');
     }
 
     // ==================== EXPORT ====================
@@ -751,10 +909,13 @@
         dom.btnExport.disabled = true;
 
         try {
-            const response = await fetch(`/api/cut/${state.videoId}`, {
+            showToast('正在导出...');
+
+            const response = await fetch(`/api/export/${state.videoId}`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
+                    preview_filename: state.previewFilename,
                     sentences: state.sentences,
                     burn_subtitles: state.burnSubtitles,
                 }),
@@ -778,7 +939,7 @@
         } catch (error) {
             showToast('导出失败: ' + error.message, 'error');
         } finally {
-            dom.btnExport.disabled = false;
+            dom.btnExport.disabled = !state.previewMode;
         }
     }
 
@@ -810,6 +971,10 @@
         state.history = [];
         state.outputFilename = null;
         state.currentWordIndex = -1;
+        state.previewFilename = null;
+        state.previewMode = false;
+        state.previewDuration = 0;
+        state.previewSubtitleEntries = [];
 
         dom.fileInput.value = '';
         dom.fileLabel.textContent = '—';
@@ -822,6 +987,7 @@
         dom.timeCurrent.textContent = '00:00:00';
         dom.timeTotal.textContent = '00:00:00';
         dom.subtitleOverlay.classList.remove('visible');
+        dom.previewBadge.classList.remove('visible');
 
         showView('upload');
     }
