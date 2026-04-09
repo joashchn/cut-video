@@ -16,10 +16,7 @@
         currentWordIndex: -1,
         burnSubtitles: false,
         subtitleEntries: [], // [{start_ms, end_ms, text}, ...]
-        previewFilename: null,  // 当前预览文件名
-        previewMode: false,     // 是否处于预览模式
-        previewDuration: 0,     // 预览视频时长
-        previewSubtitleEntries: [], // 预览模式下的调整时间戳字幕
+        keptSegments: null,     // [{start_ms, end_ms}, ...] 当前保留段
         hasTranscription: false,    // 是否已生成字幕
     };
 
@@ -48,7 +45,7 @@
         btnUndo: $('btn-undo'),
         btnReset: $('btn-reset'),
         btnExport: $('btn-export'),
-        btnPreview: $('btn-preview'),
+
         btnGenerate: $('btn-generate'),
         btnSelectVideo: $('btn-select-video'),
         fileInputEditor: $('file-input-editor'),
@@ -199,8 +196,7 @@
             renderTimeline();
             renderWordList();
             updateStats();
-            buildSubtitleEntries();
-            updateButtonStates();
+            rebuildPlayback();
 
             showToast('字幕生成完成');
 
@@ -242,25 +238,62 @@
         dom.progressBar.addEventListener('click', e => {
             const rect = dom.progressBar.getBoundingClientRect();
             const percent = (e.clientX - rect.left) / rect.width;
-            const totalDuration = state.previewMode ? state.previewDuration : state.duration;
-            dom.videoPlayer.currentTime = percent * totalDuration;
+            const virtualDuration = getVirtualDuration();
+            const virtualMs = percent * virtualDuration;
+            const originalMs = virtualToOriginal(virtualMs, state.keptSegments);
+            dom.videoPlayer.currentTime = originalMs / 1000;
         });
     }
 
     function onTimeUpdate() {
-        const current = dom.videoPlayer.currentTime;
-        const totalDuration = state.previewMode ? state.previewDuration : state.duration;
-        const percent = totalDuration > 0 ? (current / totalDuration) * 100 : 0;
+        const currentMs = dom.videoPlayer.currentTime * 1000;
+        const segments = state.keptSegments;
+
+        // 跳段播放引擎：检查当前时间是否在保留段内
+        if (segments && segments.length > 0) {
+            const lastSeg = segments[segments.length - 1];
+            // 超过最后一个保留段的终点，暂停
+            if (currentMs >= lastSeg.end_ms) {
+                dom.videoPlayer.pause();
+                setPlayState(false);
+                return;
+            }
+
+            // 检查是否落入删除区间
+            let inKept = false;
+            for (let i = 0; i < segments.length; i++) {
+                const seg = segments[i];
+                if (currentMs >= seg.start_ms && currentMs < seg.end_ms) {
+                    inKept = true;
+                    break;
+                }
+            }
+
+            if (!inKept) {
+                // 落在删除区间，seek 到下一个保留段起点
+                for (let i = 0; i < segments.length; i++) {
+                    if (segments[i].start_ms > currentMs) {
+                        dom.videoPlayer.currentTime = segments[i].start_ms / 1000;
+                        return;
+                    }
+                }
+                // 没有更多保留段，暂停
+                dom.videoPlayer.pause();
+                setPlayState(false);
+                return;
+            }
+        }
+
+        // 更新进度条（虚拟时间轴）
+        const virtualDuration = getVirtualDuration();
+        const virtualCurrent = originalToVirtual(currentMs, segments);
+        const percent = virtualDuration > 0 ? (virtualCurrent / virtualDuration) * 100 : 0;
 
         dom.progressFill.style.width = percent + '%';
         dom.progressThumb.style.left = percent + '%';
-        dom.timeCurrent.textContent = formatTimecode(current);
+        dom.timeCurrent.textContent = formatTimecode(virtualCurrent / 1000);
 
-        if (state.previewMode) {
-            showPreviewSubtitle();
-        } else {
-            highlightCurrentWord();
-        }
+        highlightCurrentWord();
     }
 
     function setPlayState(playing) {
@@ -430,37 +463,6 @@
 
     function highlightCurrentWord() {
         const currentMs = dom.videoPlayer.currentTime * 1000;
-        const allWords = getAllWords();
-
-        // Clear all
-        document.querySelectorAll('.word.current').forEach(el => el.classList.remove('current'));
-        document.querySelectorAll('.word-block.current').forEach(el => el.classList.remove('current'));
-
-        // Find current word
-        let currentIdx = -1;
-        for (let i = 0; i < allWords.length; i++) {
-            if (currentMs >= allWords[i].begin_time && currentMs < allWords[i].end_time) {
-                currentIdx = i;
-                break;
-            }
-        }
-
-        if (currentIdx >= 0 && currentIdx !== state.currentWordIndex) {
-            state.currentWordIndex = currentIdx;
-
-            // Word in list
-            const wordEls = dom.wordList.querySelectorAll('.word');
-            if (wordEls[currentIdx]) {
-                wordEls[currentIdx].classList.add('current');
-                wordEls[currentIdx].scrollIntoView({ behavior: 'smooth', block: 'center' });
-            }
-
-            // Word block
-            const blockEls = dom.timelineTrack.querySelectorAll('.word-block');
-            if (blockEls[currentIdx]) {
-                blockEls[currentIdx].classList.add('current');
-            }
-        }
 
         // Subtitle overlay - 显示完整字幕行（与烧录逻辑一致）
         const entry = state.subtitleEntries.find(
@@ -474,66 +476,47 @@
         }
     }
 
-    // ==================== SUBTITLE ENTRIES ====================
+    // ==================== TIME MAPPING ====================
     /**
-     * 将原始时间映射到剪辑后时间（与 subtitle.py _map_original_to_adjusted 对齐）
+     * 原始时间 → 虚拟时间（进度条显示用）
      */
-    function mapOriginalToAdjusted(originalMs, keptSegments) {
+    function originalToVirtual(originalMs, segments) {
+        if (!segments || !segments.length) return originalMs;
         let cumulative = 0;
-        for (const [startMs, endMs] of keptSegments) {
-            if (originalMs < startMs) return cumulative;
-            if (originalMs <= endMs) return cumulative + (originalMs - startMs);
-            cumulative += (endMs - startMs);
+        for (const seg of segments) {
+            if (originalMs < seg.start_ms) return cumulative;
+            if (originalMs <= seg.end_ms) return cumulative + (originalMs - seg.start_ms);
+            cumulative += (seg.end_ms - seg.start_ms);
         }
         return cumulative;
     }
 
     /**
-     * 构建预览模式的字幕条目（时间戳映射到剪辑后时间轴）
+     * 虚拟时间 → 原始时间（进度条点击/拖拽用）
      */
-    function buildPreviewSubtitleEntries(keptSegments) {
-        if (!keptSegments || !keptSegments.length) {
-            // 无删除（直接复制），使用原始字幕
-            state.previewSubtitleEntries = [...state.subtitleEntries];
-            return;
-        }
-
-        const entries = [];
-        for (const sentence of state.sentences) {
-            const words = sentence.words || [];
-            if (!words.length) continue;
-
-            const segments = splitWordsByPunctuation(sentence.text, words);
-            for (const segWords of segments) {
-                const kept = segWords.filter(w => !w.deleted && w.type !== 'silence');
-                if (!kept.length) continue;
-
-                const text = kept.map(w => w.edited_text || w.text).join('');
-                const adjStart = mapOriginalToAdjusted(kept[0].begin_time, keptSegments);
-                const adjEnd = mapOriginalToAdjusted(kept[kept.length - 1].end_time, keptSegments);
-
-                if (adjEnd > adjStart) {
-                    entries.push({ start_ms: adjStart, end_ms: adjEnd, text });
-                }
+    function virtualToOriginal(virtualMs, segments) {
+        if (!segments || !segments.length) return virtualMs;
+        let cumulative = 0;
+        for (const seg of segments) {
+            const segLen = seg.end_ms - seg.start_ms;
+            if (virtualMs <= cumulative + segLen) {
+                return seg.start_ms + (virtualMs - cumulative);
             }
+            cumulative += segLen;
         }
-        state.previewSubtitleEntries = entries;
+        // 超出末尾
+        const last = segments[segments.length - 1];
+        return last.end_ms;
     }
 
     /**
-     * 预览模式下显示字幕
+     * 获取虚拟总时长（保留段时长之和）
      */
-    function showPreviewSubtitle() {
-        const currentMs = dom.videoPlayer.currentTime * 1000;
-        const entry = state.previewSubtitleEntries.find(
-            e => currentMs >= e.start_ms && currentMs < e.end_ms
-        );
-        if (entry) {
-            dom.subtitleOverlay.textContent = entry.text;
-            dom.subtitleOverlay.classList.add('visible');
-        } else {
-            dom.subtitleOverlay.classList.remove('visible');
+    function getVirtualDuration() {
+        if (!state.keptSegments || !state.keptSegments.length) {
+            return state.duration * 1000;
         }
+        return state.keptSegments.reduce((sum, seg) => sum + (seg.end_ms - seg.start_ms), 0);
     }
 
     /**
@@ -640,7 +623,7 @@
     // ==================== WORD EDIT ====================
     function startEditWord(sentenceIdx, wordIdx, element) {
         const word = state.sentences[sentenceIdx].words[wordIdx];
-        if (word.deleted || word.type === 'silence') return;
+        if (word.type === 'silence') return;
 
         const currentText = word.edited_text || word.text;
         const input = document.createElement('input');
@@ -666,9 +649,7 @@
             }
             renderWordList();
             updateStats();
-            updateButtonStates();
-            exitPreviewMode();
-            buildSubtitleEntries();
+            rebuildPlayback();
         };
 
         input.addEventListener('blur', confirm);
@@ -708,10 +689,8 @@
 
         dom.videoPlayer.currentTime = word.begin_time / 1000;
 
-        exitPreviewMode();
         updateStats();
-        updateButtonStates();
-        buildSubtitleEntries();
+        rebuildPlayback();
     }
 
     function toggleSentence(sentenceIdx) {
@@ -735,10 +714,8 @@
 
         dom.videoPlayer.currentTime = sentence.begin_time / 1000;
 
-        exitPreviewMode();
         updateStats();
-        updateButtonStates();
-        buildSubtitleEntries();
+        rebuildPlayback();
     }
 
     function toggleWordByGlobalIndex(globalIdx) {
@@ -768,10 +745,8 @@
         state.sentences = state.history.pop();
         renderWordList();
         updateTimelineHighlights();
-        exitPreviewMode();
         updateStats();
-        updateButtonStates();
-        buildSubtitleEntries();
+        rebuildPlayback();
         showToast('已撤销');
     }
 
@@ -786,10 +761,8 @@
 
         renderWordList();
         updateTimelineHighlights();
-        exitPreviewMode();
         updateStats();
-        updateButtonStates();
-        buildSubtitleEntries();
+        rebuildPlayback();
         showToast('已重置');
     }
 
@@ -797,7 +770,6 @@
     function initActions() {
         dom.btnUndo.addEventListener('click', undo);
         dom.btnReset.addEventListener('click', resetAll);
-        dom.btnPreview.addEventListener('click', previewVideo);
         dom.btnExport.addEventListener('click', exportVideo);
         dom.btnGenerate.addEventListener('click', generateSubtitles);
     }
@@ -816,12 +788,10 @@
 
     function updateButtonStates() {
         const hasHistory = state.history.length > 0;
-        const hasDeleted = state.sentences.some(s => s.words.some(w => w.deleted));
 
         dom.btnUndo.disabled = !hasHistory;
         dom.btnReset.disabled = !hasHistory;
-        dom.btnPreview.disabled = !hasDeleted || !state.hasTranscription;
-        dom.btnExport.disabled = !state.previewMode;
+        dom.btnExport.disabled = !state.hasTranscription;
         dom.btnGenerate.disabled = !state.videoId || state.hasTranscription;
     }
 
@@ -912,10 +882,7 @@
         state.history = [];
         state.outputFilename = null;
         state.currentWordIndex = -1;
-        state.previewFilename = null;
-        state.previewMode = false;
-        state.previewDuration = 0;
-        state.previewSubtitleEntries = [];
+        state.keptSegments = null;
         state.hasTranscription = false;
 
         dom.videoPlayer.src = '';
@@ -930,81 +897,119 @@
         dom.previewBadge.classList.remove('visible');
     }
 
-    // ==================== PREVIEW ======================================
-    async function previewVideo() {
-        dom.btnPreview.disabled = true;
+    // ==================== KEPT SEGMENTS & REBUILD ====================
+    /**
+     * 前端计算保留段（与后端 cut.py 反向剔除算法一致）
+     */
+    function buildKeptSegments() {
+        const PADDING_MS = 30;
+        const durationMs = state.duration * 1000;
 
-        try {
-            showToast('正在生成预览...');
-
-            const response = await fetch(`/api/cut/${state.videoId}`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    sentences: state.sentences,
-                }),
-            });
-
-            if (!response.ok) {
-                const err = await response.json();
-                throw new Error(err.detail || '剪辑失败');
+        // 预处理：自动删除被删除词包围的静默标记
+        for (const sentence of state.sentences) {
+            const words = sentence.words || [];
+            for (let i = 0; i < words.length; i++) {
+                const word = words[i];
+                if (word.type === 'silence' && !word.deleted) {
+                    let prevDeleted = true;
+                    let nextDeleted = true;
+                    for (let j = i - 1; j >= 0; j--) {
+                        if (words[j].type !== 'silence') {
+                            prevDeleted = words[j].deleted || false;
+                            break;
+                        }
+                    }
+                    for (let j = i + 1; j < words.length; j++) {
+                        if (words[j].type !== 'silence') {
+                            nextDeleted = words[j].deleted || false;
+                            break;
+                        }
+                    }
+                    if (prevDeleted && nextDeleted) {
+                        word.deleted = true;
+                    }
+                }
             }
-
-            const data = await response.json();
-            state.previewFilename = data.output_filename;
-
-            // 构建预览字幕（映射到剪辑后时间轴）
-            buildPreviewSubtitleEntries(data.kept_segments);
-
-            // 进入预览模式
-            enterPreviewMode();
-
-            showToast('预览已生成，正在播放');
-
-        } catch (error) {
-            showToast('剪辑失败: ' + error.message, 'error');
-        } finally {
-            updateButtonStates();
         }
-    }
 
-    function enterPreviewMode() {
-        state.previewMode = true;
+        // 收集删除段
+        const deletedRanges = [];
+        let hasAnyKept = false;
+        for (const sentence of state.sentences) {
+            for (const word of (sentence.words || [])) {
+                if (word.deleted) {
+                    deletedRanges.push([word.begin_time, word.end_time]);
+                } else if (word.type !== 'silence') {
+                    hasAnyKept = true;
+                }
+            }
+        }
 
-        // 切换视频源为预览文件
-        const previewUrl = `/api/download/${state.previewFilename}`;
-        dom.videoPlayer.src = previewUrl;
-        dom.videoPlayer.addEventListener('loadedmetadata', function onLoaded() {
-            dom.videoPlayer.removeEventListener('loadedmetadata', onLoaded);
-            state.previewDuration = dom.videoPlayer.duration;
-            dom.timeTotal.textContent = formatTimecode(state.previewDuration);
-            dom.videoPlayer.play();
-            setPlayState(true);
+        if (!hasAnyKept || !deletedRanges.length) {
+            state.keptSegments = null; // 无删除，播放原始视频
+            return;
+        }
+
+        // 合并重叠删除段
+        deletedRanges.sort((a, b) => a[0] - b[0]);
+        const merged = [deletedRanges[0].slice()];
+        for (let i = 1; i < deletedRanges.length; i++) {
+            const last = merged[merged.length - 1];
+            const curr = deletedRanges[i];
+            if (curr[0] <= last[1] + PADDING_MS) {
+                last[1] = Math.max(last[1], curr[1]);
+            } else {
+                merged.push(curr.slice());
+            }
+        }
+
+        // 构建补集
+        const keptSegments = [];
+        let cursor = 0;
+        for (const [delStart, delEnd] of merged) {
+            const segStart = cursor;
+            const segEnd = Math.max(cursor, delStart - PADDING_MS);
+            if (segEnd > segStart) {
+                keptSegments.push({ start_ms: segStart, end_ms: segEnd });
+            }
+            cursor = delEnd + PADDING_MS;
+        }
+        if (cursor < durationMs) {
+            keptSegments.push({ start_ms: cursor, end_ms: durationMs });
+        }
+
+        // 过滤无内容段
+        const filtered = keptSegments.filter(seg => {
+            return state.sentences.some(sent =>
+                (sent.words || []).some(w =>
+                    !w.deleted && w.type !== 'silence' &&
+                    w.begin_time < seg.end_ms && w.end_time > seg.start_ms
+                )
+            );
         });
 
-        // 显示预览标签
-        dom.previewBadge.classList.add('visible');
-
-        updateButtonStates();
+        state.keptSegments = filtered.length > 0 ? filtered : null;
     }
 
-    function exitPreviewMode() {
-        if (!state.previewMode) return;
-
-        state.previewMode = false;
-        state.previewFilename = null;
-        state.previewDuration = 0;
-        state.previewSubtitleEntries = [];
-
-        // 切回原始视频
-        dom.videoPlayer.src = `/api/video/${state.videoId}`;
-        dom.timeTotal.textContent = formatTimecode(state.duration);
-
-        // 隐藏预览标签
-        dom.previewBadge.classList.remove('visible');
-
+    /**
+     * 重建播放状态（每次编辑操作后调用）
+     */
+    function rebuildPlayback() {
+        buildKeptSegments();
+        buildSubtitleEntries();
         updateButtonStates();
-        showToast('已修改内容，请重新执行剪辑');
+
+        // 更新总时长显示
+        const virtualDuration = getVirtualDuration();
+        dom.timeTotal.textContent = formatTimecode(virtualDuration / 1000);
+
+        // 显示/隐藏预览标签
+        if (state.keptSegments) {
+            dom.previewBadge.textContent = '已编辑';
+            dom.previewBadge.classList.add('visible');
+        } else {
+            dom.previewBadge.classList.remove('visible');
+        }
     }
 
     // ==================== EXPORT ====================
@@ -1030,7 +1035,7 @@
                     });
                 } catch (e) {
                     // 用户取消
-                    dom.btnExport.disabled = !state.previewMode;
+                    dom.btnExport.disabled = !state.hasTranscription;
                     return;
                 }
             }
@@ -1038,12 +1043,11 @@
             // 显示导出进度弹窗
             showExportModal();
 
-            // 后端导出
+            // 后端导出（直接从原始视频剪辑导出）
             const response = await fetch(`/api/export/${state.videoId}`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
-                    preview_filename: state.previewFilename,
                     sentences: state.sentences,
                     burn_subtitles: state.burnSubtitles,
                 }),
@@ -1083,7 +1087,7 @@
         } catch (error) {
             showExportError(error.message);
         } finally {
-            dom.btnExport.disabled = !state.previewMode;
+            dom.btnExport.disabled = !state.hasTranscription;
         }
     }
 
