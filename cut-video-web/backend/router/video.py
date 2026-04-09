@@ -269,12 +269,91 @@ async def get_timestamps(video_id: str):
     with open(result_path, "r", encoding="utf-8") as f:
         data = json.load(f)
 
+    # 注入静默片段标记（超过阈值的词间间隙显示为可删除的静默块）
+    _inject_silence_markers(data["sentences"], data["duration"])
+
     return TimestampsResponse(
         video_id=video_id,
         filename=data["filename"],
         duration=data["duration"],
         sentences=data["sentences"],
     )
+
+
+def _inject_silence_markers(
+    sentences: list,
+    duration_seconds: float,
+    threshold_ms: int = 500,
+) -> list:
+    """
+    检测词间静默间隙，注入可删除的静默标记
+
+    将超过阈值的静默时段作为 type="silence" 的特殊词插入 sentences 中，
+    用户可在前端像删除普通词一样删除这些静默段。
+    """
+    if not sentences:
+        return sentences
+
+    video_duration_ms = int(duration_seconds * 1000)
+
+    # 构建时间线：所有词按时间排序
+    timeline = []  # (begin_ms, end_ms, sentence_idx, word_idx)
+    for s_idx, sentence in enumerate(sentences):
+        for w_idx, word in enumerate(sentence.get("words", [])):
+            timeline.append((word["begin_time"], word["end_time"], s_idx, w_idx))
+
+    if not timeline:
+        return sentences
+
+    timeline.sort(key=lambda x: x[0])
+
+    # 检测静默间隙
+    silences = []  # (sentence_idx, insert_after_word_idx, marker)
+
+    # 视频开头到第一个词
+    first = timeline[0]
+    if first[0] > threshold_ms:
+        silences.append((first[2], -1, _make_silence_marker(0, first[0])))
+
+    # 相邻词之间的间隙
+    for i in range(1, len(timeline)):
+        gap = timeline[i][0] - timeline[i - 1][1]
+        if gap > threshold_ms:
+            silences.append((
+                timeline[i - 1][2],
+                timeline[i - 1][3],
+                _make_silence_marker(timeline[i - 1][1], timeline[i][0]),
+            ))
+
+    # 最后一个词到视频结尾
+    last = timeline[-1]
+    if video_duration_ms - last[1] > threshold_ms:
+        silences.append((last[2], last[3], _make_silence_marker(last[1], video_duration_ms)))
+
+    # 反向插入以保持索引正确
+    from collections import defaultdict
+    by_sentence = defaultdict(list)
+    for s_idx, after_w_idx, marker in silences:
+        by_sentence[s_idx].append((after_w_idx, marker))
+
+    for s_idx in by_sentence:
+        items = sorted(by_sentence[s_idx], key=lambda x: x[0], reverse=True)
+        words = sentences[s_idx].get("words", [])
+        for after_w_idx, marker in items:
+            words.insert(after_w_idx + 1, marker)
+
+    return sentences
+
+
+def _make_silence_marker(begin_ms: int, end_ms: int) -> dict:
+    """创建静默标记词"""
+    duration_sec = (end_ms - begin_ms) / 1000
+    return {
+        "text": f"\U0001f507 {duration_sec:.1f}s",
+        "begin_time": begin_ms,
+        "end_time": end_ms,
+        "type": "silence",
+    }
 
 
 @router.get("/video/{video_id}")

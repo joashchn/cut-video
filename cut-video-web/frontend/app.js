@@ -318,7 +318,8 @@
 
         allWords.forEach((word, index) => {
             const block = document.createElement('div');
-            block.className = 'word-block';
+            const isSilence = word.type === 'silence';
+            block.className = 'word-block' + (isSilence ? ' silence' : '');
             block.dataset.index = index;
 
             const startPercent = (word.begin_time / (state.duration * 1000)) * 100;
@@ -326,7 +327,7 @@
 
             block.style.left = startPercent + '%';
             block.style.width = Math.max(widthPercent, 2) + '%';
-            block.textContent = word.text.length > 6 ? word.text.slice(0, 6) : word.text;
+            block.textContent = isSilence ? '🔇' : (word.text.length > 6 ? word.text.slice(0, 6) : word.text);
 
             block.addEventListener('click', () => toggleWordByGlobalIndex(index));
 
@@ -360,6 +361,7 @@
 
         blocks.forEach((block, index) => {
             block.classList.toggle('deleted', allWords[index].deleted);
+            block.classList.toggle('silence', allWords[index].type === 'silence');
         });
     }
 
@@ -388,23 +390,26 @@
 
             sentence.words.forEach((word, wIdx) => {
                 const el = document.createElement('span');
-                el.className = 'word';
-                el.textContent = word.edited_text || word.text;
+                const isSilence = word.type === 'silence';
+                el.className = 'word' + (isSilence ? ' silence' : '');
+                el.textContent = isSilence ? word.text : (word.edited_text || word.text);
                 el.dataset.sentenceIdx = sIdx;
                 el.dataset.wordIdx = wIdx;
 
                 if (word.deleted) el.classList.add('deleted');
-                if (word.edited_text) el.classList.add('edited');
+                if (word.edited_text && !isSilence) el.classList.add('edited');
 
                 el.addEventListener('click', e => {
                     e.stopPropagation();
                     toggleWord(sIdx, wIdx, el);
                 });
 
-                el.addEventListener('dblclick', e => {
-                    e.stopPropagation();
-                    startEditWord(sIdx, wIdx, el);
-                });
+                if (!isSilence) {
+                    el.addEventListener('dblclick', e => {
+                        e.stopPropagation();
+                        startEditWord(sIdx, wIdx, el);
+                    });
+                }
 
                 words.appendChild(el);
             });
@@ -547,7 +552,7 @@
             const segments = splitWordsByPunctuation(sentence.text, words);
 
             for (const segWords of segments) {
-                const kept = segWords.filter(w => !w.deleted);
+                const kept = segWords.filter(w => !w.deleted && w.type !== 'silence');
                 if (!kept.length) continue;
 
                 const text = kept.map(w => w.edited_text || w.text).join('');
@@ -565,7 +570,7 @@
     // ==================== WORD EDIT ====================
     function startEditWord(sentenceIdx, wordIdx, element) {
         const word = state.sentences[sentenceIdx].words[wordIdx];
-        if (word.deleted) return;
+        if (word.deleted || word.type === 'silence') return;
 
         const currentText = word.edited_text || word.text;
         const input = document.createElement('input');

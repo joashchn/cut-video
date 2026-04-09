@@ -68,8 +68,8 @@ class SubtitleGenerator:
             if not words:
                 continue
 
-            # 获取保留的词
-            kept_words = [w for w in words if not w.get("deleted", False)]
+            # 获取保留的词（过滤删除的词和静默标记）
+            kept_words = [w for w in words if not w.get("deleted", False) and w.get("type") != "silence"]
             if not kept_words:
                 continue
 
@@ -77,8 +77,8 @@ class SubtitleGenerator:
             segments = self._split_words_by_punctuation_positions(sentence["text"], words)
 
             for segment_words in segments:
-                # 过滤保留的词（被删除的词不显示）
-                segment_kept = [w for w in segment_words if not w.get("deleted", False)]
+                # 过滤保留的词（被删除的词和静默标记不显示）
+                segment_kept = [w for w in segment_words if not w.get("deleted", False) and w.get("type") != "silence"]
                 if not segment_kept:
                     continue
 

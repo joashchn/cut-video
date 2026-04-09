@@ -823,6 +823,26 @@ button:disabled {
     opacity: 0.5;
 }
 
+/* Silence blocks in timeline */
+.word-block.silence {
+    background: rgba(113, 113, 122, 0.1);
+    border: 1px dashed var(--text-disabled);
+    color: var(--text-disabled);
+    font-size: 9px;
+}
+
+.word-block.silence:hover {
+    border-color: var(--text-secondary);
+    box-shadow: none;
+}
+
+.word-block.silence.deleted {
+    background: var(--danger-muted);
+    border-color: var(--danger);
+    color: var(--danger);
+    opacity: 0.4;
+}
+
 /* Word List */
 .word-list {
     flex: 1;
@@ -904,6 +924,28 @@ button:disabled {
 
 .word.edited {
     border-bottom: 2px dashed var(--accent);
+}
+
+/* Silence markers in word list */
+.word.silence {
+    background: rgba(113, 113, 122, 0.12);
+    border: 1px dashed var(--text-disabled);
+    color: var(--text-tertiary);
+    font-family: var(--font-mono);
+    font-size: 0.7rem;
+}
+
+.word.silence:hover {
+    background: rgba(113, 113, 122, 0.25);
+    border-color: var(--text-secondary);
+}
+
+.word.silence.deleted {
+    background: var(--danger-muted);
+    border-color: var(--danger);
+    color: var(--danger);
+    text-decoration: line-through;
+    opacity: 0.5;
 }
 
 /* Word inline edit input */

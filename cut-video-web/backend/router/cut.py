@@ -75,42 +75,102 @@ async def cut_video(video_id: str, request: CutRequest):
         # 使用 cutter 服务
         cutter = VideoCutter(str(OUTPUTS_DIR))
 
-        # 按连续保留词组构建 kept_segments
-        # 不再逐词收集独立时间点，避免词间自然间隙导致片段断裂
+        # === 反向剔除逻辑 ===
+        # 保留整个视频，只移除用户明确删除的词对应的时间段
+        # 这样静默时段（讲师操作、思考等）自然保留
         PADDING_MS = 30  # 边界填充，应对 ASR 时间戳偏差
-        kept_segments = []
 
+        # 预处理：自动删除被删除词包围的静默标记
+        # 例如 [word1(删)] [🔇] [word2(删)] → 静默标记也应被删除
+        # 避免删除整句后留下静默时段的残留片段
         for sentence in request.sentences:
             words = sentence.get("words", [])
-            run_start = None
-            run_end = None
+            for i, word in enumerate(words):
+                if word.get("type") == "silence" and not word.get("deleted", False):
+                    # 找到最近的前/后真实词，检查是否都已删除
+                    prev_deleted = True
+                    next_deleted = True
+                    for j in range(i - 1, -1, -1):
+                        if words[j].get("type") != "silence":
+                            prev_deleted = words[j].get("deleted", False)
+                            break
+                    for j in range(i + 1, len(words)):
+                        if words[j].get("type") != "silence":
+                            next_deleted = words[j].get("deleted", False)
+                            break
+                    if prev_deleted and next_deleted:
+                        word["deleted"] = True
 
-            for word in words:
-                if not word.get("deleted", False):
-                    if run_start is None:
-                        run_start = word["begin_time"]
-                    run_end = word["end_time"]
-                else:
-                    # 遇到删除的词，结束当前连续段
-                    if run_start is not None:
-                        kept_segments.append((
-                            max(0, run_start - PADDING_MS),
-                            run_end + PADDING_MS,
-                        ))
-                        run_start = None
-                        run_end = None
+        # 1. 收集所有被删除的时间段（包括自动删除的静默）
+        deleted_ranges = []
+        has_any_kept = False
+        for sentence in request.sentences:
+            for word in sentence.get("words", []):
+                if word.get("deleted", False):
+                    deleted_ranges.append((
+                        word["begin_time"],
+                        word["end_time"],
+                    ))
+                elif word.get("type") != "silence":
+                    # 只有真实词（非静默）计为保留内容
+                    has_any_kept = True
 
-            # 句子结束，收尾当前连续段
-            if run_start is not None:
-                kept_segments.append((
-                    max(0, run_start - PADDING_MS),
-                    run_end + PADDING_MS,
-                ))
-
-        if not kept_segments:
+        if not has_any_kept:
             raise HTTPException(status_code=400, detail="所有词都被删除，没有保留内容")
 
-        cutter.cut_video(input_path, kept_segments, output_filename)
+        # 2. 如果没有删除任何词，直接复制原视频（无需剪辑）
+        if not deleted_ranges:
+            import shutil
+            shutil.copy2(input_path, str(output_path))
+        else:
+            # 3. 获取视频总时长，构建 kept_segments（删除段的补集）
+            video_duration_ms = int(cutter.get_duration(input_path) * 1000)
+
+            # 合并重叠的删除段并排序
+            deleted_ranges.sort(key=lambda x: x[0])
+            merged_deleted = [deleted_ranges[0]]
+            for curr in deleted_ranges[1:]:
+                last = merged_deleted[-1]
+                if curr[0] <= last[1] + PADDING_MS:
+                    merged_deleted[-1] = (last[0], max(last[1], curr[1]))
+                else:
+                    merged_deleted.append(curr)
+
+            # 构建补集：[0, del1.start], [del1.end, del2.start], ..., [delN.end, duration]
+            kept_segments = []
+            cursor = 0
+            for del_start, del_end in merged_deleted:
+                seg_start = cursor
+                seg_end = max(cursor, del_start - PADDING_MS)
+                if seg_end > seg_start:
+                    kept_segments.append((seg_start, seg_end))
+                cursor = del_end + PADDING_MS
+
+            # 最后一段：从最后删除段结束到视频末尾
+            if cursor < video_duration_ms:
+                kept_segments.append((cursor, video_duration_ms))
+
+            # 过滤：只保留包含真实保留词的段（移除被删除词之间的间隙残留）
+            # 被删除词之间的小间隙（<500ms，无静默标记）不在 deleted_ranges 中，
+            # 会变成小的 kept_segments，需要过滤掉
+            filtered_segments = []
+            for seg_start, seg_end in kept_segments:
+                seg_has_content = any(
+                    not w.get("deleted", False)
+                    and w.get("type") != "silence"
+                    and w["begin_time"] < seg_end
+                    and w["end_time"] > seg_start
+                    for sent in request.sentences
+                    for w in sent.get("words", [])
+                )
+                if seg_has_content:
+                    filtered_segments.append((seg_start, seg_end))
+            kept_segments = filtered_segments
+
+            if not kept_segments:
+                raise HTTPException(status_code=400, detail="剪辑后没有保留内容")
+
+            cutter.cut_video(input_path, kept_segments, output_filename)
 
         subtitle_filename = None
         if request.burn_subtitles:
