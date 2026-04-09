@@ -6,10 +6,14 @@ FastAPI 应用入口
 
 import sys
 from pathlib import Path
+from dotenv import load_dotenv
 
 # 添加项目根目录到 Python 路径
 project_root = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(project_root))
+
+# 加载 .env 文件
+load_dotenv(Path(__file__).parent.parent / ".env")
 
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
