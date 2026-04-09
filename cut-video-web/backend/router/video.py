@@ -153,14 +153,33 @@ async def upload_video(file: UploadFile = File(...)):
         "error": None,
     }
 
-    # 后台触发转写
-    asyncio.create_task(transcribe_video(video_id))
-
     return UploadResponse(
         video_id=video_id,
         filename=filename,
         status=StatusEnum.PENDING,
     )
+
+
+@router.post("/transcribe/{video_id}")
+async def start_transcription(video_id: str):
+    """
+    手动触发 ASR 转写
+
+    上传视频后，用户点击“生成字幕”时调用
+    """
+    status = transcription_status.get(video_id)
+    if not status:
+        raise HTTPException(status_code=404, detail="视频不存在")
+
+    # 已完成或正在处理中，不重复触发
+    if status["status"] == StatusEnum.DONE:
+        return {"message": "转写已完成", "status": "done"}
+    if status["status"] == StatusEnum.PROCESSING:
+        return {"message": "转写进行中", "status": "processing"}
+
+    # 触发转写
+    asyncio.create_task(transcribe_video(video_id))
+    return {"message": "转写已启动", "status": "pending"}
 
 
 async def transcribe_video(video_id: str):

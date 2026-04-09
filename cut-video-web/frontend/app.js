@@ -20,6 +20,7 @@
         previewMode: false,     // 是否处于预览模式
         previewDuration: 0,     // 预览视频时长
         previewSubtitleEntries: [], // 预览模式下的调整时间戳字幕
+        hasTranscription: false,    // 是否已生成字幕
     };
 
     // ==================== DOM ====================
@@ -48,6 +49,9 @@
         btnReset: $('btn-reset'),
         btnExport: $('btn-export'),
         btnPreview: $('btn-preview'),
+        btnGenerate: $('btn-generate'),
+        btnSelectVideo: $('btn-select-video'),
+        fileInputEditor: $('file-input-editor'),
         toggleSubtitles: $('toggle-subtitles'),
         timeCurrent: $('time-current'),
         timeTotal: $('time-total'),
@@ -73,7 +77,19 @@
         statEdited: $('stat-edited'),
         statTotal: $('stat-total'),
 
-        // Modal
+        // Modal - Export
+        modalExport: $('modal-export'),
+        modalExportTitle: $('modal-export-title'),
+        modalExportDesc: $('modal-export-desc'),
+        modalExportIcon: $('modal-export-icon'),
+        modalExportActions: $('modal-export-actions'),
+        exportProgress: $('export-progress'),
+        exportProgressFill: $('export-progress-fill'),
+        exportOutputInfo: $('export-output-info'),
+        outputPath: $('output-path'),
+        btnExportOk: $('btn-export-ok'),
+
+        // Modal - Legacy
         modalResult: $('modal-result'),
         modalKept: $('modal-kept'),
         btnDownload: $('btn-download'),
@@ -90,9 +106,10 @@
         initVideoPlayer();
         initTransport();
         initActions();
-        initModal();
+        initExportModal();
         initKeyboard();
         initSubtitleToggle();
+        initSelectVideo();
     }
 
     // ==================== UPLOAD ====================
@@ -149,8 +166,17 @@
             state.filename = data.filename;
             dom.fileLabel.textContent = data.filename;
 
-            updateLoading('ASR 转写中...', '视频上传完成，正在进行 ASR 转写（v1 + 热词）...');
-            pollStatus();
+            // 上传完成，直接进入编辑器视图（无字幕）
+            dom.videoPlayer.src = `/api/video/${state.videoId}`;
+            dom.videoPlayer.addEventListener('loadedmetadata', function onMeta() {
+                dom.videoPlayer.removeEventListener('loadedmetadata', onMeta);
+                state.duration = dom.videoPlayer.duration;
+                dom.timeTotal.textContent = formatTimecode(state.duration);
+            });
+            state.hasTranscription = false;
+            dom.wordList.innerHTML = '<div class="word-list-placeholder">点击上方「生成字幕」按钮开始 ASR 转写</div>';
+            showView('editor');
+            updateButtonStates();
 
         } catch (error) {
             showToast('上传失败: ' + error.message, 'error');
@@ -158,44 +184,7 @@
         }
     }
 
-    async function pollStatus() {
-        let polls = 0;
-        const maxPolls = 300;
-
-        const tick = async () => {
-            if (polls++ > maxPolls) {
-                showToast('转写超时，请重试', 'error');
-                showView('upload');
-                return;
-            }
-
-            try {
-                const response = await fetch(`/api/status/${state.videoId}`);
-                const data = await response.json();
-
-                if (data.status === 'done') {
-                    await loadTranscription();
-                } else if (data.status === 'error') {
-                    showToast('转写失败: ' + data.error, 'error');
-                    showView('upload');
-                } else if (data.status === 'processing') {
-                    const progress = Math.min(85, 20 + (polls / maxPolls) * 65);
-                    dom.loadingBar.style.width = progress + '%';
-                    setTimeout(tick, 1000);
-                } else {
-                    setTimeout(tick, 1000);
-                }
-            } catch (error) {
-                setTimeout(tick, 1000);
-            }
-        };
-
-        tick();
-    }
-
     async function loadTranscription() {
-        updateLoading('加载中...', '正在解析转写结果...');
-
         try {
             const response = await fetch(`/api/timestamps/${state.videoId}`);
             if (!response.ok) throw new Error('加载失败');
@@ -203,20 +192,20 @@
             const data = await response.json();
             state.sentences = data.sentences;
             state.duration = data.duration;
+            state.hasTranscription = true;
 
-            dom.videoPlayer.src = `/api/video/${state.videoId}`;
             dom.timeTotal.textContent = formatTimecode(state.duration);
 
             renderTimeline();
             renderWordList();
             updateStats();
             buildSubtitleEntries();
+            updateButtonStates();
 
-            showView('editor');
+            showToast('字幕生成完成');
 
         } catch (error) {
             showToast('加载失败: ' + error.message, 'error');
-            showView('upload');
         }
     }
 
@@ -802,6 +791,7 @@
         dom.btnReset.addEventListener('click', resetAll);
         dom.btnPreview.addEventListener('click', previewVideo);
         dom.btnExport.addEventListener('click', exportVideo);
+        dom.btnGenerate.addEventListener('click', generateSubtitles);
     }
 
     function updateStats() {
@@ -822,12 +812,117 @@
 
         dom.btnUndo.disabled = !hasHistory;
         dom.btnReset.disabled = !hasHistory;
-        dom.btnPreview.disabled = !hasDeleted;
-        // 导出按钮：仅在预览模式且未修改时可用
+        dom.btnPreview.disabled = !hasDeleted || !state.hasTranscription;
         dom.btnExport.disabled = !state.previewMode;
+        dom.btnGenerate.disabled = !state.videoId || state.hasTranscription;
     }
 
-    // ==================== PREVIEW ====================
+    // ==================== GENERATE SUBTITLES ====================
+    async function generateSubtitles() {
+        if (!state.videoId) return;
+        dom.btnGenerate.disabled = true;
+
+        try {
+            // 触发 ASR
+            const triggerResp = await fetch(`/api/transcribe/${state.videoId}`, { method: 'POST' });
+            if (!triggerResp.ok) throw new Error('ASR 启动失败');
+
+            const triggerData = await triggerResp.json();
+
+            // 如果已完成，直接加载
+            if (triggerData.status === 'done') {
+                await loadTranscription();
+                return;
+            }
+
+            // 显示加载视图
+            showView('loading');
+            updateLoading('ASR 转写中...', '正在进行 ASR 转写（v1 + 热词）...');
+            dom.loadingBar.style.width = '20%';
+
+            // 轮询状态，完成后回到编辑器
+            let polls = 0;
+            const maxPolls = 300;
+
+            const tick = async () => {
+                if (polls++ > maxPolls) {
+                    showToast('转写超时，请重试', 'error');
+                    showView('editor');
+                    updateButtonStates();
+                    return;
+                }
+
+                try {
+                    const response = await fetch(`/api/status/${state.videoId}`);
+                    const data = await response.json();
+
+                    if (data.status === 'done') {
+                        showView('editor');
+                        await loadTranscription();
+                    } else if (data.status === 'error') {
+                        showToast('转写失败: ' + data.error, 'error');
+                        showView('editor');
+                        updateButtonStates();
+                    } else {
+                        const progress = Math.min(85, 20 + (polls / maxPolls) * 65);
+                        dom.loadingBar.style.width = progress + '%';
+                        setTimeout(tick, 1000);
+                    }
+                } catch (error) {
+                    setTimeout(tick, 1000);
+                }
+            };
+
+            tick();
+
+        } catch (error) {
+            showToast('生成字幕失败: ' + error.message, 'error');
+            dom.btnGenerate.disabled = false;
+        }
+    }
+
+    // ==================== SELECT VIDEO ====================
+    function initSelectVideo() {
+        dom.btnSelectVideo.addEventListener('click', () => {
+            dom.fileInputEditor.click();
+        });
+        dom.fileInputEditor.addEventListener('change', e => {
+            if (e.target.files.length > 0) {
+                // 重置当前状态并处理新文件
+                resetState();
+                handleFile(e.target.files[0]);
+                e.target.value = '';
+            }
+        });
+    }
+
+    function resetState() {
+        state.videoId = null;
+        state.filename = null;
+        state.duration = 0;
+        state.sentences = [];
+        state.history = [];
+        state.outputFilename = null;
+        state.currentWordIndex = -1;
+        state.previewFilename = null;
+        state.previewMode = false;
+        state.previewDuration = 0;
+        state.previewSubtitleEntries = [];
+        state.hasTranscription = false;
+
+        dom.videoPlayer.src = '';
+        dom.wordList.innerHTML = '';
+        dom.timelineTrack.innerHTML = '';
+        dom.timelineRuler.innerHTML = '';
+        dom.progressFill.style.width = '0%';
+        dom.progressThumb.style.left = '0%';
+        dom.timeCurrent.textContent = '00:00:00';
+        dom.timeTotal.textContent = '00:00:00';
+        dom.subtitleOverlay.classList.remove('visible');
+        dom.previewBadge.classList.remove('visible');
+    }
+
+    // ==================== PREVIEW ======================================
     async function previewVideo() {
         dom.btnPreview.disabled = true;
 
@@ -909,8 +1004,27 @@
         dom.btnExport.disabled = true;
 
         try {
-            showToast('正在导出...');
+            // 先弹出原生保存对话框，让用户选择保存位置
+            const originalName = (state.filename || 'video').replace(/\.[^.]+$/, '');
+            let fileHandle;
+            try {
+                fileHandle = await window.showSaveFilePicker({
+                    suggestedName: `${originalName}_cut.mp4`,
+                    types: [{
+                        description: 'MP4 视频',
+                        accept: { 'video/mp4': ['.mp4'] },
+                    }],
+                });
+            } catch (e) {
+                // 用户取消了对话框
+                dom.btnExport.disabled = !state.previewMode;
+                return;
+            }
 
+            // 显示导出进度弹窗
+            showExportModal();
+
+            // 后端导出（生成最终文件）
             const response = await fetch(`/api/export/${state.videoId}`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
@@ -927,67 +1041,87 @@
             }
 
             const data = await response.json();
-            state.outputFilename = data.output_filename;
 
-            const kept = state.sentences.reduce((acc, s) =>
-                acc + s.words.filter(w => !w.deleted).length, 0
-            );
-            dom.modalKept.textContent = kept;
+            // 下载文件并写入用户选择的位置
+            const downloadResp = await fetch(`/api/download/${data.output_filename}`);
+            if (!downloadResp.ok) throw new Error('下载导出文件失败');
 
-            showModal();
+            const blob = await downloadResp.blob();
+            const writable = await fileHandle.createWritable();
+            await writable.write(blob);
+            await writable.close();
+
+            // 显示导出完成
+            showExportSuccess(fileHandle.name);
 
         } catch (error) {
-            showToast('导出失败: ' + error.message, 'error');
+            showExportError(error.message);
         } finally {
             dom.btnExport.disabled = !state.previewMode;
         }
     }
 
-    // ==================== MODAL ====================
-    function initModal() {
-        dom.btnDownload.addEventListener('click', () => {
-            if (state.outputFilename) {
-                dom.downloadFrame.src = `/api/download/${state.outputFilename}`;
-            }
-        });
-        dom.btnNew.addEventListener('click', startNew);
+    // ==================== EXPORT MODAL ====================
+    function initExportModal() {
+        dom.btnExportOk.addEventListener('click', hideExportModal);
     }
 
-    function showModal() {
-        dom.modalResult.classList.add('visible');
+    function showExportModal() {
+        dom.modalExportTitle.textContent = '正在导出...';
+        dom.modalExportDesc.textContent = '正在处理视频，请稍候...';
+        dom.exportProgress.style.display = '';
+        dom.exportProgressFill.style.width = '0%';
+        dom.exportProgressFill.classList.add('indeterminate');
+        dom.exportOutputInfo.style.display = 'none';
+        dom.modalExportActions.style.display = 'none';
+        dom.modalExportIcon.innerHTML = `
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+                <polyline points="7 10 12 15 17 10"/>
+                <line x1="12" y1="15" x2="12" y2="3"/>
+            </svg>`;
+        dom.modalExport.classList.add('visible');
     }
 
-    function hideModal() {
-        dom.modalResult.classList.remove('visible');
+    function showExportSuccess(fileName) {
+        dom.modalExportTitle.textContent = '导出完成';
+        dom.modalExportDesc.textContent = `已保存为 ${fileName}`;
+        dom.exportProgress.style.display = 'none';
+        dom.exportProgressFill.classList.remove('indeterminate');
+        dom.modalExportIcon.innerHTML = `
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <circle cx="12" cy="12" r="10"/>
+                <path d="M8 12l3 3 5-6"/>
+            </svg>`;
+        dom.exportOutputInfo.style.display = 'none';
+        dom.modalExportActions.style.display = '';
+    }
+
+    function showExportError(message) {
+        dom.modalExportTitle.textContent = '导出失败';
+        dom.modalExportDesc.textContent = message;
+        dom.exportProgress.style.display = 'none';
+        dom.exportProgressFill.classList.remove('indeterminate');
+        dom.modalExportIcon.innerHTML = `
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <circle cx="12" cy="12" r="10"/>
+                <line x1="15" y1="9" x2="9" y2="15"/>
+                <line x1="9" y1="9" x2="15" y2="15"/>
+            </svg>`;
+        dom.exportOutputInfo.style.display = 'none';
+        dom.modalExportActions.style.display = '';
+    }
+
+    function hideExportModal() {
+        dom.modalExport.classList.remove('visible');
     }
 
     function startNew() {
-        hideModal();
-
-        state.videoId = null;
-        state.filename = null;
-        state.duration = 0;
-        state.sentences = [];
-        state.history = [];
-        state.outputFilename = null;
-        state.currentWordIndex = -1;
-        state.previewFilename = null;
-        state.previewMode = false;
-        state.previewDuration = 0;
-        state.previewSubtitleEntries = [];
+        hideExportModal();
+        resetState();
 
         dom.fileInput.value = '';
         dom.fileLabel.textContent = '—';
-        dom.videoPlayer.src = '';
-        dom.wordList.innerHTML = '';
-        dom.timelineTrack.innerHTML = '';
-        dom.timelineRuler.innerHTML = '';
-        dom.progressFill.style.width = '0%';
-        dom.progressThumb.style.left = '0%';
-        dom.timeCurrent.textContent = '00:00:00';
-        dom.timeTotal.textContent = '00:00:00';
-        dom.subtitleOverlay.classList.remove('visible');
-        dom.previewBadge.classList.remove('visible');
 
         showView('upload');
     }

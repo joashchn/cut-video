@@ -4,6 +4,14 @@
  */
 
 /* ==================== CSS RESET ==================== */
+@font-face {
+    font-family: 'XinQingNian';
+    src: url('/fonts/WenYue-XinQingNianTi-NC-W8.otf') format('opentype');
+    font-weight: normal;
+    font-style: normal;
+    font-display: swap;
+}
+
 *, *::before, *::after {
     margin: 0;
     padding: 0;
@@ -582,12 +590,16 @@ button:disabled {
     display: inline-block;
     padding: 4px 16px;
     background: none;
-    font-size: 1.1rem;
+    font-family: 'XinQingNian', 'PingFang SC', sans-serif;
+    font-size: 1.2rem;
+    font-weight: normal;
     color: #fff;
-    /* 模拟 ASS Outline=1.5 的真描边效果 */
-    -webkit-text-stroke: 1px rgba(0,0,0,0.85);
-    paint-order: stroke fill;
-    text-shadow: 0 0 3px rgba(0,0,0,0.5);
+    text-shadow:
+        2px 2px 4px rgba(0,0,0,0.9),
+        -1px -1px 2px rgba(0,0,0,0.8),
+        1px -1px 2px rgba(0,0,0,0.8),
+        -1px 1px 2px rgba(0,0,0,0.8),
+        0 0 8px rgba(0,0,0,0.6);
     opacity: 0;
     transition: opacity 0.15s;
     max-width: 90%;
@@ -618,6 +630,100 @@ button:disabled {
 
 .preview-badge.visible {
     opacity: 1;
+}
+
+/* ==================== EXPORT PROGRESS MODAL ==================== */
+.export-progress {
+    width: 100%;
+    margin: 12px 0;
+}
+
+.export-progress-bar {
+    width: 100%;
+    height: 4px;
+    background: var(--bg-tertiary, #e5e7eb);
+    border-radius: 2px;
+    overflow: hidden;
+}
+
+.export-progress-fill {
+    height: 100%;
+    background: var(--accent, #6366f1);
+    border-radius: 2px;
+    transition: width 0.3s ease;
+}
+
+.export-progress-fill.indeterminate {
+    width: 30% !important;
+    animation: indeterminate 1.5s ease-in-out infinite;
+}
+
+@keyframes indeterminate {
+    0% { transform: translateX(-100%); }
+    100% { transform: translateX(400%); }
+}
+
+.export-output-dir {
+    width: 100%;
+    margin: 8px 0;
+    text-align: center;
+}
+
+.output-path {
+    display: inline-block;
+    max-width: 100%;
+    padding: 6px 12px;
+    background: var(--bg-secondary, #f3f4f6);
+    border-radius: 6px;
+    font-family: 'Space Mono', monospace;
+    font-size: 0.75rem;
+    color: var(--text-secondary, #6b7280);
+    word-break: break-all;
+}
+
+/* ==================== OUTPUT DIR ROW ==================== */
+.output-dir-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 16px;
+    border-top: 1px solid var(--border, #e5e7eb);
+}
+
+.output-dir-label {
+    font-size: 0.75rem;
+    color: var(--text-secondary, #6b7280);
+    white-space: nowrap;
+}
+
+.output-dir-input {
+    flex: 1;
+    padding: 4px 8px;
+    border: 1px solid var(--border, #e5e7eb);
+    border-radius: 4px;
+    font-size: 0.75rem;
+    font-family: 'Space Mono', monospace;
+    color: var(--text-primary, #111827);
+    background: var(--bg-primary, #fff);
+    outline: none;
+}
+
+.output-dir-input:focus {
+    border-color: var(--accent, #6366f1);
+}
+
+.output-dir-input::placeholder {
+    color: var(--text-tertiary, #9ca3af);
+}
+
+/* ==================== WORD LIST PLACEHOLDER ==================== */
+.word-list-placeholder {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    height: 200px;
+    color: var(--text-tertiary, #9ca3af);
+    font-size: 0.875rem;
 }
 
 /* Video Controls - below video */

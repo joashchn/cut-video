@@ -187,27 +187,31 @@ class VideoCutter:
         # 使用 ffmpeg-full（支持 libass）
         ffmpeg_path = "/opt/homebrew/opt/ffmpeg-full/bin/ffmpeg"
 
-        # ASS force_style - 与前端 .subtitle-overlay CSS 完全对齐
-        # 无背景框，纯白色文字 + 黑色描边增强可读性
-        # BorderStyle=1: 描边+阴影模式（无背景框）
-        # Outline=1.5: 黑色描边宽度（模拟 CSS text-shadow 四方向描边）
-        # Shadow=0: 无额外阴影
+        # 字体路径：使用项目内置的新青年体
+        fonts_dir = str(Path(__file__).parent.parent.parent.parent / "assets" / "fonts")
+        font_name = "WenYue XinQingNianTi (Non-Commercial Use) W8"  # OTF 内部字体 fullname
+
+        # ASS force_style - 新青年体 + 黑色阴影效果
+        # 与前端 CSS text-shadow 效果一致
+        # BorderStyle=1: 描边+阴影模式
+        # Outline=2: 黑色描边宽度（强调阴影效果）
+        # Shadow=3: 黑色投影距离
         force_style = (
-            "FontName=PingFang SC,"
-            "FontSize=18,"
+            f"FontName={font_name},"
+            "FontSize=20,"
             "PrimaryColour=&H00FFFFFF,"
             "OutlineColour=&H00000000,"
-            "BackColour=&H00000000,"
+            "BackColour=&H80000000,"
             "BorderStyle=1,"
-            "Outline=1.5,"
-            "Shadow=0,"
+            "Outline=2,"
+            "Shadow=3,"
             "MarginV=20,"
             "Alignment=2,"
             "Bold=0"
         )
 
         escaped_path = self._escape_subtitle_path(subtitle_path)
-        vf = f"subtitles='{escaped_path}':force_style='{force_style}'"
+        vf = f"subtitles='{escaped_path}':fontsdir='{fonts_dir}':force_style='{force_style}'"
 
         cmd = [
             ffmpeg_path,

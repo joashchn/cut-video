@@ -217,29 +217,22 @@ async def export_video(video_id: str, request: ExportRequest):
 
     try:
         if not request.burn_subtitles:
-            # 无需烧录字幕，直接使用预览视频
+            # 无需烧录字幕，直接返回预览视频
             return ExportResponse(
                 output_id=video_id,
                 output_filename=request.preview_filename,
                 message="导出完成",
             )
 
-        # 烧录字幕：需要 kept_segments 来计算相对时间戳
+        # 烧录字幕
         cutter = VideoCutter(str(OUTPUTS_DIR))
-
-        # 获取预览视频时长（即剪辑后时长）
-        preview_duration_ms = int(cutter.get_duration(str(preview_path)) * 1000)
-
-        # 构建 kept_segments（与 cut 端点相同的逻辑）
         kept_segments = _build_kept_segments(request.sentences, cutter, video_id)
 
-        # 生成字幕文件
         subtitle_gen = SubtitleGenerator(str(OUTPUTS_DIR))
         subtitle_filename = f"sub_{video_id}_{uuid.uuid4().hex[:8]}.srt"
         subtitle_gen.generate_srt(request.sentences, subtitle_filename, kept_segments)
         subtitle_path = OUTPUTS_DIR / subtitle_filename
 
-        # 烧录字幕到预览视频
         output_with_subs = f"cut_sub_{video_id}_{uuid.uuid4().hex[:8]}.mp4"
         cutter.burn_subtitles(str(preview_path), str(subtitle_path), output_with_subs)
 
@@ -250,6 +243,8 @@ async def export_video(video_id: str, request: ExportRequest):
             message="导出完成（含字幕）",
         )
 
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 

@@ -40,11 +40,18 @@ OUTPUTS_DIR = BASE_DIR / "outputs"
 UPLOADS_DIR.mkdir(exist_ok=True)
 OUTPUTS_DIR.mkdir(exist_ok=True)
 
+# 字体资源目录
+FONTS_DIR = BASE_DIR.parent / "assets" / "fonts"
+
 # 确定前端静态文件目录：优先使用 dist/（生产构建），否则使用源码目录
 STATIC_DIR = FRONTEND_DIST_DIR if FRONTEND_DIST_DIR.exists() else FRONTEND_DIR
 
 # 挂载 outputs 目录用于下载
 app.mount("/outputs", StaticFiles(directory=str(OUTPUTS_DIR)), name="outputs")
+
+# 挂载字体目录供前端 CSS @font-face 使用
+if FONTS_DIR.exists():
+    app.mount("/fonts", StaticFiles(directory=str(FONTS_DIR)), name="fonts")
 
 # 注册路由
 app.include_router(video.router)
