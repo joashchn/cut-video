@@ -97,6 +97,10 @@ class VideoCutter:
         """
         使用 ffmpeg 提取视频片段
 
+        注意：-ss 必须放在 -i 之后（output seeking），确保帧精确裁剪。
+        放在 -i 之前（input seeking）虽然快但会跳到最近关键帧，
+        对短片段可能导致 0 个视频帧被提取（只剩音频）。
+
         Args:
             input_path: 输入视频
             start_ms: 起始时间（毫秒）
@@ -108,13 +112,15 @@ class VideoCutter:
 
         cmd = [
             "ffmpeg",
-            "-y",  # 覆盖输出
-            "-ss", str(start_sec),
+            "-y",
             "-i", input_path,
+            "-ss", str(start_sec),       # 放在 -i 之后：帧精确裁剪
             "-t", str(duration_sec),
-            "-c:v", "libx264",  # 重新编码视频
-            "-c:a", "aac",     # 重新编码音频
+            "-c:v", "libx264",
+            "-c:a", "aac",
             "-avoid_negative_ts", "make_zero",
+            "-map", "0:v:0",             # 显式映射视频流
+            "-map", "0:a:0?",            # 显式映射音频流（可选）
             str(output_path),
         ]
 
@@ -130,6 +136,9 @@ class VideoCutter:
     def _concat_segments(self, concat_list: Path, output_path: Path):
         """
         使用 ffmpeg concat demuxer 合并视频片段
+
+        所有片段已在 _extract_segment 中编码为 h264/aac，
+        此处使用 stream copy 避免二次编码（更快、无质量损失）。
         """
         cmd = [
             "ffmpeg",
@@ -137,9 +146,8 @@ class VideoCutter:
             "-f", "concat",
             "-safe", "0",
             "-i", str(concat_list),
-            "-c:v", "libx264",
-            "-c:a", "aac",
-            "-shortest",
+            "-c", "copy",
+            "-movflags", "+faststart",
             str(output_path),
         ]
 
@@ -161,6 +169,11 @@ class VideoCutter:
         """
         烧录字幕到视频
 
+        样式与前端预览 CSS 完全一致：
+        - 白色文字 + 半透明黑色背景框 rgba(0,0,0,0.7)
+        - 无衬线字体，底部居中
+        - 文字阴影增强可读性
+
         Args:
             input_video: 输入视频路径（已剪辑的视频）
             subtitle_path: SRT 字幕文件路径
@@ -174,11 +187,33 @@ class VideoCutter:
         # 使用 ffmpeg-full（支持 libass）
         ffmpeg_path = "/opt/homebrew/opt/ffmpeg-full/bin/ffmpeg"
 
+        # ASS force_style - 与前端 .subtitle-overlay CSS 完全对齐
+        # 无背景框，纯白色文字 + 黑色描边增强可读性
+        # BorderStyle=1: 描边+阴影模式（无背景框）
+        # Outline=1.5: 黑色描边宽度（模拟 CSS text-shadow 四方向描边）
+        # Shadow=0: 无额外阴影
+        force_style = (
+            "FontName=PingFang SC,"
+            "FontSize=18,"
+            "PrimaryColour=&H00FFFFFF,"
+            "OutlineColour=&H00000000,"
+            "BackColour=&H00000000,"
+            "BorderStyle=1,"
+            "Outline=1.5,"
+            "Shadow=0,"
+            "MarginV=20,"
+            "Alignment=2,"
+            "Bold=0"
+        )
+
+        escaped_path = self._escape_subtitle_path(subtitle_path)
+        vf = f"subtitles='{escaped_path}':force_style='{force_style}'"
+
         cmd = [
             ffmpeg_path,
             "-y",
             "-i", input_video,
-            "-vf", f"subtitles='{subtitle_path}'",
+            "-vf", vf,
             "-c:v", "libx264",
             "-c:a", "aac",
             str(output_path),
@@ -194,6 +229,16 @@ class VideoCutter:
             raise RuntimeError(f"字幕烧录失败: {result.stderr}")
 
         return str(output_path)
+
+    @staticmethod
+    def _escape_subtitle_path(path: str) -> str:
+        """转义 ffmpeg subtitles 滤镜中的特殊字符"""
+        path = path.replace("\\", "\\\\")
+        path = path.replace(":", "\\:")
+        path = path.replace("'", "\\'")
+        path = path.replace("[", "\\[")
+        path = path.replace("]", "\\]")
+        return path
 
     def get_duration(self, video_path: str) -> float:
         """获取视频时长（秒）"""

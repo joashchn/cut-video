@@ -11,7 +11,7 @@
     <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Space+Mono:wght@400;700&display=swap" rel="stylesheet">
 
     <!-- Styles -->
-    <link rel="stylesheet" href="/static/styles.css?v=13">
+    <link rel="stylesheet" href="/styles.css">
 </head>
 <body>
 
@@ -145,9 +145,11 @@
                 <!-- Left: Video Preview -->
                 <div class="preview-panel">
                     <div class="preview-wrapper">
-                        <video id="video-player"></video>
-                        <div class="preview-overlay" id="preview-overlay">
-                            <span class="current-word-badge" id="current-word-badge"></span>
+                        <div class="video-container">
+                            <video id="video-player"></video>
+                            <div class="preview-overlay" id="preview-overlay">
+                                <span class="subtitle-overlay" id="subtitle-overlay"></span>
+                            </div>
                         </div>
                     </div>
 
@@ -210,6 +212,10 @@
                                 <span class="stat-num" id="stat-deleted">0</span> 已删
                             </span>
                             <span class="stat-sep">·</span>
+                            <span class="stat edited-stat">
+                                <span class="stat-num" id="stat-edited">0</span> 已编辑
+                            </span>
+                            <span class="stat-sep">·</span>
                             <span class="stat total-stat">
                                 <span class="stat-num" id="stat-total">0</span> 总计
                             </span>
@@ -231,6 +237,7 @@
                             <kbd>Space</kbd> 播放
                             <kbd>←</kbd><kbd>→</kbd> 跳转
                             <kbd>点击</kbd> 删除
+                            <kbd>双击</kbd> 编辑
                         </span>
                     </div>
                 </div>
@@ -271,6 +278,6 @@
     <!-- Download iframe -->
     <iframe id="download-frame" style="display:none;"></iframe>
 
-    <script src="/static/app.js?v=13"></script>
+    <script type="module" src="/app.js"></script>
 </body>
 </html>

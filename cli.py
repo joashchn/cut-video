@@ -19,6 +19,7 @@ Usage:
 import argparse
 import os
 import sys
+from pathlib import Path
 from dotenv import load_dotenv
 
 from src.transcriber import FunASRTranscriber, ModelType
@@ -42,8 +43,8 @@ def main():
         "--model",
         "-m",
         choices=["fun-asr", "paraformer-v1", "paraformer-v2", "sensevoice"],
-        default="paraformer-v2",
-        help="模型类型 (默认: paraformer-v2)",
+        default="paraformer-v1",
+        help="模型类型 (默认: paraformer-v1，配合热词效果最佳)",
     )
     parser.add_argument(
         "--output",
@@ -69,7 +70,7 @@ def main():
     parser.add_argument(
         "--hotword-file",
         "-w",
-        help="热词配置文件路径（JSON 格式），如 ./hotwords.json",
+        help="热词配置文件路径（JSON 格式），默认自动加载项目根目录 hotwords.json",
     )
     parser.add_argument(
         "--api-key",
@@ -100,12 +101,20 @@ def main():
     print(f"时间戳: {'开启' if args.timestamp else '关闭'}")
     print("-" * 50)
 
-    # 处理热词
+    # 处理热词：显式指定或自动查找项目根目录 hotwords.json
     phrase_id = None
     vocabulary_id = None
-    if args.hotword_file:
-        print(f"加载热词配置: {args.hotword_file}")
-        phrases = HotwordManager.load_from_file(args.hotword_file)
+    hotword_file = args.hotword_file
+
+    # 未指定时自动查找项目根目录下的 hotwords.json
+    if not hotword_file:
+        default_hotword = Path(__file__).parent / "hotwords.json"
+        if default_hotword.exists():
+            hotword_file = str(default_hotword)
+
+    if hotword_file:
+        print(f"加载热词配置: {hotword_file}")
+        phrases = HotwordManager.load_from_file(hotword_file)
         hotword_id = HotwordManager.create_phrases(phrases, model=args.model, api_key=api_key)
         # v2 模型使用 vocabulary_id，v1 使用 phrase_id
         if args.model == "paraformer-v2":

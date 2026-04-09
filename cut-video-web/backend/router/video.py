@@ -31,6 +31,69 @@ UPLOADS_DIR.mkdir(exist_ok=True)
 # 转写状态存储（内存中）
 transcription_status: dict[str, dict] = {}
 
+# 视频文件扩展名（用于扫描恢复）
+_VIDEO_EXTENSIONS = {".mp4", ".mov", ".avi", ".mkv", ".webm", ".flv", ".wmv"}
+
+
+def restore_transcription_status():
+    """
+    启动时从 uploads/ 目录恢复已完成的转写状态
+
+    扫描 *_result.json 恢复为 done 状态，
+    扫描无 result.json 的视频文件标记为 error（中断的任务）。
+    """
+    restored = 0
+    errored = 0
+
+    # 收集所有已有 result.json 的 video_id
+    done_ids: set[str] = set()
+
+    for result_file in UPLOADS_DIR.glob("*_result.json"):
+        video_id = result_file.name.split("_")[0]
+        if video_id in transcription_status:
+            continue  # 已存在则跳过
+
+        try:
+            with open(result_file, "r", encoding="utf-8") as f:
+                data = json.load(f)
+
+            filename = data.get("filename", "")
+            filepath = str(UPLOADS_DIR / filename) if filename else ""
+
+            transcription_status[video_id] = {
+                "status": StatusEnum.DONE,
+                "filename": filename,
+                "filepath": filepath,
+                "task_id": data.get("task_id"),
+                "error": None,
+            }
+            done_ids.add(video_id)
+            restored += 1
+        except Exception as e:
+            print(f"[恢复] 解析 {result_file.name} 失败: {e}")
+
+    # 扫描无 result.json 的视频文件，标记为 error
+    for video_file in UPLOADS_DIR.iterdir():
+        if video_file.suffix.lower() not in _VIDEO_EXTENSIONS:
+            continue
+        video_id = video_file.name.split("_")[0]
+        if video_id in transcription_status or video_id in done_ids:
+            continue
+        # 检查是否有对应的 result.json
+        result_path = UPLOADS_DIR / f"{video_id}_result.json"
+        if not result_path.exists():
+            transcription_status[video_id] = {
+                "status": StatusEnum.ERROR,
+                "filename": video_file.name,
+                "filepath": str(video_file),
+                "task_id": None,
+                "error": "服务重启前任务未完成",
+            }
+            errored += 1
+
+    if restored or errored:
+        print(f"[恢复] 已恢复 {restored} 个已完成任务，{errored} 个中断任务")
+
 
 class StatusEnum(str, Enum):
     PENDING = "pending"

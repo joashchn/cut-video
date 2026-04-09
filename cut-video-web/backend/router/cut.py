@@ -55,11 +55,12 @@ async def cut_video(video_id: str, request: CutRequest):
 
     请求体包含更新了 deleted 状态的 sentences 数据
     """
-    # 获取原视频路径
-    video_files = list(UPLOADS_DIR.glob(f"{video_id}_*"))
-
-    # 排除结果文件
-    video_files = [f for f in video_files if not f.name.endswith("_result.json")]
+    # 获取原视频路径（排除 .wav 音频和 _result.json）
+    video_extensions = {'.mp4', '.mov', '.avi', '.mkv', '.webm', '.flv', '.wmv'}
+    video_files = [
+        f for f in UPLOADS_DIR.glob(f"{video_id}_*")
+        if f.suffix.lower() in video_extensions
+    ]
 
     if not video_files:
         raise HTTPException(status_code=404, detail="视频不存在")
@@ -73,12 +74,38 @@ async def cut_video(video_id: str, request: CutRequest):
 
         # 使用 cutter 服务
         cutter = VideoCutter(str(OUTPUTS_DIR))
+
+        # 按连续保留词组构建 kept_segments
+        # 不再逐词收集独立时间点，避免词间自然间隙导致片段断裂
+        PADDING_MS = 30  # 边界填充，应对 ASR 时间戳偏差
         kept_segments = []
 
         for sentence in request.sentences:
-            for word in sentence.get("words", []):
+            words = sentence.get("words", [])
+            run_start = None
+            run_end = None
+
+            for word in words:
                 if not word.get("deleted", False):
-                    kept_segments.append((word["begin_time"], word["end_time"]))
+                    if run_start is None:
+                        run_start = word["begin_time"]
+                    run_end = word["end_time"]
+                else:
+                    # 遇到删除的词，结束当前连续段
+                    if run_start is not None:
+                        kept_segments.append((
+                            max(0, run_start - PADDING_MS),
+                            run_end + PADDING_MS,
+                        ))
+                        run_start = None
+                        run_end = None
+
+            # 句子结束，收尾当前连续段
+            if run_start is not None:
+                kept_segments.append((
+                    max(0, run_start - PADDING_MS),
+                    run_end + PADDING_MS,
+                ))
 
         if not kept_segments:
             raise HTTPException(status_code=400, detail="所有词都被删除，没有保留内容")

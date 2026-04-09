@@ -15,6 +15,7 @@
         outputFilename: null,
         currentWordIndex: -1,
         burnSubtitles: false,
+        subtitleEntries: [], // [{start_ms, end_ms, text}, ...]
     };
 
     // ==================== DOM ====================
@@ -51,7 +52,7 @@
         progressBar: $('progress-bar'),
         progressFill: $('progress-fill'),
         progressThumb: $('progress-thumb'),
-        currentWordBadge: $('current-word-badge'),
+        subtitleOverlay: $('subtitle-overlay'),
         fileLabel: $('file-label'),
 
         // Timeline
@@ -63,6 +64,7 @@
 
         // Stats
         statDeleted: $('stat-deleted'),
+        statEdited: $('stat-edited'),
         statTotal: $('stat-total'),
 
         // Modal
@@ -202,6 +204,7 @@
             renderTimeline();
             renderWordList();
             updateStats();
+            buildSubtitleEntries();
 
             showView('editor');
 
@@ -386,15 +389,21 @@
             sentence.words.forEach((word, wIdx) => {
                 const el = document.createElement('span');
                 el.className = 'word';
-                el.textContent = word.text;
+                el.textContent = word.edited_text || word.text;
                 el.dataset.sentenceIdx = sIdx;
                 el.dataset.wordIdx = wIdx;
 
                 if (word.deleted) el.classList.add('deleted');
+                if (word.edited_text) el.classList.add('edited');
 
                 el.addEventListener('click', e => {
                     e.stopPropagation();
                     toggleWord(sIdx, wIdx, el);
+                });
+
+                el.addEventListener('dblclick', e => {
+                    e.stopPropagation();
+                    startEditWord(sIdx, wIdx, el);
                 });
 
                 words.appendChild(el);
@@ -406,17 +415,17 @@
     }
 
     function highlightCurrentWord() {
-        const currentTime = dom.videoPlayer.currentTime * 1000;
+        const currentMs = dom.videoPlayer.currentTime * 1000;
         const allWords = getAllWords();
 
         // Clear all
         document.querySelectorAll('.word.current').forEach(el => el.classList.remove('current'));
         document.querySelectorAll('.word-block.current').forEach(el => el.classList.remove('current'));
 
-        // Find current
+        // Find current word
         let currentIdx = -1;
         for (let i = 0; i < allWords.length; i++) {
-            if (currentTime >= allWords[i].begin_time && currentTime < allWords[i].end_time) {
+            if (currentMs >= allWords[i].begin_time && currentMs < allWords[i].end_time) {
                 currentIdx = i;
                 break;
             }
@@ -424,11 +433,6 @@
 
         if (currentIdx >= 0 && currentIdx !== state.currentWordIndex) {
             state.currentWordIndex = currentIdx;
-            const word = allWords[currentIdx];
-
-            // Badge
-            dom.currentWordBadge.textContent = word.text;
-            dom.currentWordBadge.classList.add('visible');
 
             // Word in list
             const wordEls = dom.wordList.querySelectorAll('.word');
@@ -443,6 +447,160 @@
                 blockEls[currentIdx].classList.add('current');
             }
         }
+
+        // Subtitle overlay - 显示完整字幕行（与烧录逻辑一致）
+        const entry = state.subtitleEntries.find(
+            e => currentMs >= e.start_ms && currentMs < e.end_ms
+        );
+        if (entry) {
+            dom.subtitleOverlay.textContent = entry.text;
+            dom.subtitleOverlay.classList.add('visible');
+        } else {
+            dom.subtitleOverlay.classList.remove('visible');
+        }
+    }
+
+    // ==================== SUBTITLE ENTRIES ====================
+    /**
+     * 按标点分割词列表 - 与 subtitle.py _split_words_by_punctuation_positions 完全对齐
+     */
+    function splitWordsByPunctuation(sentenceText, words) {
+        const punctuations = '，。！？、；：\u201c\u201d\u2018\u2019（）';
+        
+        // 找出所有标点位置
+        const punctPositions = new Set();
+        for (let i = 0; i < sentenceText.length; i++) {
+            if (punctuations.includes(sentenceText[i])) {
+                punctPositions.add(i);
+            }
+        }
+        
+        if (punctPositions.size === 0) return [words];
+        
+        // 逐词匹配在句子中的位置
+        const wordPositions = []; // [{start, end}]
+        let searchStart = 0;
+        for (const word of words) {
+            const idx = sentenceText.indexOf(word.text, searchStart);
+            if (idx >= 0) {
+                wordPositions.push({ start: idx, end: idx + word.text.length - 1 });
+                searchStart = idx + word.text.length;
+            } else {
+                wordPositions.push({ start: -1, end: -1 });
+            }
+        }
+        
+        // 确定分割点
+        const splitIndices = new Set();
+        for (const p of punctPositions) {
+            for (let i = 0; i < wordPositions.length; i++) {
+                const { start, end } = wordPositions[i];
+                if (start > p) {
+                    if (i > 0) splitIndices.add(i - 1);
+                    break;
+                } else if (start <= p && p <= end) {
+                    splitIndices.add(i);
+                    break;
+                }
+            }
+        }
+        
+        // 处理句尾标点
+        if (wordPositions.length > 0) {
+            const lastEnd = wordPositions[wordPositions.length - 1].end;
+            if (lastEnd >= 0) {
+                for (const p of punctPositions) {
+                    if (p > lastEnd) {
+                        splitIndices.add(words.length - 1);
+                        break;
+                    }
+                }
+            }
+        }
+        
+        // 分割
+        const segments = [];
+        let current = [];
+        for (let i = 0; i < words.length; i++) {
+            current.push(words[i]);
+            if (splitIndices.has(i)) {
+                segments.push(current);
+                current = [];
+            }
+        }
+        if (current.length) segments.push(current);
+        
+        return segments;
+    }
+
+    /**
+     * 构建字幕条目缓存 - 与 subtitle.py _build_sentence_subtitles 逻辑一致
+     * 使用原始时间戳（预览播放原始视频）
+     */
+    function buildSubtitleEntries() {
+        const entries = [];
+
+        for (const sentence of state.sentences) {
+            const words = sentence.words || [];
+            if (!words.length) continue;
+
+            const segments = splitWordsByPunctuation(sentence.text, words);
+
+            for (const segWords of segments) {
+                const kept = segWords.filter(w => !w.deleted);
+                if (!kept.length) continue;
+
+                const text = kept.map(w => w.edited_text || w.text).join('');
+                entries.push({
+                    start_ms: kept[0].begin_time,
+                    end_ms: kept[kept.length - 1].end_time,
+                    text,
+                });
+            }
+        }
+
+        state.subtitleEntries = entries;
+    }
+
+    // ==================== WORD EDIT ====================
+    function startEditWord(sentenceIdx, wordIdx, element) {
+        const word = state.sentences[sentenceIdx].words[wordIdx];
+        if (word.deleted) return;
+
+        const currentText = word.edited_text || word.text;
+        const input = document.createElement('input');
+        input.type = 'text';
+        input.className = 'word-edit-input';
+        input.value = currentText;
+
+        element.replaceWith(input);
+        input.focus();
+        input.select();
+
+        let confirmed = false;
+        const confirm = () => {
+            if (confirmed) return;
+            confirmed = true;
+            const newText = input.value.trim();
+            if (newText && newText !== word.text) {
+                saveHistory();
+                word.edited_text = newText;
+            } else {
+                if (word.edited_text) saveHistory();
+                delete word.edited_text;
+            }
+            renderWordList();
+            updateStats();
+            updateButtonStates();
+            buildSubtitleEntries();
+        };
+
+        input.addEventListener('blur', confirm);
+        input.addEventListener('keydown', e => {
+            if (e.key === 'Enter') { e.preventDefault(); input.blur(); }
+            if (e.key === 'Escape') { input.value = word.text; input.blur(); }
+            e.stopPropagation();
+        });
     }
 
     // ==================== WORD TOGGLE ====================
@@ -476,6 +634,7 @@
 
         updateStats();
         updateButtonStates();
+        buildSubtitleEntries();
     }
 
     function toggleSentence(sentenceIdx) {
@@ -501,6 +660,7 @@
 
         updateStats();
         updateButtonStates();
+        buildSubtitleEntries();
     }
 
     function toggleWordByGlobalIndex(globalIdx) {
@@ -532,19 +692,24 @@
         updateTimelineHighlights();
         updateStats();
         updateButtonStates();
+        buildSubtitleEntries();
         showToast('已撤销');
     }
 
     function resetAll() {
         if (!state.history.length) return;
 
-        state.sentences.forEach(s => s.words.forEach(w => w.deleted = false));
+        state.sentences.forEach(s => s.words.forEach(w => {
+            w.deleted = false;
+            delete w.edited_text;
+        }));
         state.history = [];
 
         renderWordList();
         updateTimelineHighlights();
         updateStats();
         updateButtonStates();
+        buildSubtitleEntries();
         showToast('已重置');
     }
 
@@ -556,12 +721,14 @@
     }
 
     function updateStats() {
-        let deleted = 0, total = 0;
+        let deleted = 0, edited = 0, total = 0;
         state.sentences.forEach(s => s.words.forEach(w => {
             total++;
             if (w.deleted) deleted++;
+            if (w.edited_text) edited++;
         }));
         dom.statDeleted.textContent = deleted;
+        dom.statEdited.textContent = edited;
         dom.statTotal.textContent = total;
     }
 
@@ -649,7 +816,7 @@
         dom.progressThumb.style.left = '0%';
         dom.timeCurrent.textContent = '00:00:00';
         dom.timeTotal.textContent = '00:00:00';
-        dom.currentWordBadge.classList.remove('visible');
+        dom.subtitleOverlay.classList.remove('visible');
 
         showView('upload');
     }

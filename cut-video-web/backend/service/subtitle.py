@@ -82,8 +82,8 @@ class SubtitleGenerator:
                 if not segment_kept:
                     continue
 
-                # 构建文本（只包含保留的词）
-                text = "".join(word["text"] for word in segment_kept)
+                # 构建文本（只包含保留的词，优先使用 edited_text）
+                text = "".join(word.get("edited_text", word["text"]) for word in segment_kept)
 
                 # 使用保留词的时间戳
                 orig_start = segment_kept[0]["begin_time"]

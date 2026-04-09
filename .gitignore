@@ -8,3 +8,19 @@ wheels/
 
 # Virtual environments
 .venv
+
+# Uploaded/generated files
+cut-video-web/backend/uploads/
+cut-video-web/backend/outputs/
+cut-video-web/uploads/
+cut-video-web/outputs/
+assets/*.mov
+assets/*.mp4
+
+# Frontend build output
+cut-video-web/frontend/dist/
+cut-video-web/frontend/node_modules/
+
+# Environment files
+.env
+cut-video-web/.env
